@@ -4,8 +4,8 @@ import 'package:app/stores/notifications/local_notification_service.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
 import 'package:flutter/material.dart';
 
-/// 个性化参数：把原来的固定值（兑换比例、提醒时间等）开放为可配置，
-/// 修改后全局生效；涉及通知排程的项保存后立即重排。
+/// 提醒时间：把原来的固定值（每日小结、纪念日提醒、任务提前量）
+/// 开放为可配置，修改后全局生效；保存后立即重排通知排程。
 class PreferenceSettingsPage extends StatefulWidget {
   const PreferenceSettingsPage({super.key});
 
@@ -134,12 +134,29 @@ class _PreferenceSettingsPageState extends State<PreferenceSettingsPage> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('个性化参数')),
+      appBar: AppBar(title: const Text('提醒时间')),
       body: ListenableBuilder(
         listenable: _settings,
         builder: (context, child) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
+            if (!_settings.notificationsEnabled) ...[
+              Material(
+                color: colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(
+                    Icons.info_outline,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  title: const Text('通知开关当前关闭'),
+                  subtitle: const Text('开启「我的-消息与通知」后，提醒时间设置才会生效'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             Card(
               clipBehavior: Clip.antiAlias,
               elevation: 0,

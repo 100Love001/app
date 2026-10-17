@@ -25,10 +25,12 @@ class HomeViewModel extends ChangeNotifier {
 
   final HomeRepository _repository;
   List<HomeAnniversary> _anniversaries = [];
+  List<HopeProgress> _hopesInProgress = [];
   bool _loading = false;
   Object? _error;
 
   List<HomeAnniversary> get anniversaries => _anniversaries;
+  List<HopeProgress> get hopesInProgress => _hopesInProgress;
   bool get loading => _loading;
   Object? get error => _error;
 
@@ -37,7 +39,12 @@ class HomeViewModel extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      _anniversaries = await _repository.loadAnniversaries(DateTime.now());
+      final results = await Future.wait([
+        _repository.loadAnniversaries(DateTime.now()),
+        _repository.loadHopesInProgress(),
+      ]);
+      _anniversaries = results[0] as List<HomeAnniversary>;
+      _hopesInProgress = results[1] as List<HopeProgress>;
     } catch (error) {
       _error = error;
     } finally {

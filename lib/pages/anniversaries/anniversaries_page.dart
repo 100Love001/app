@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:app/stores/anniversaries/anniversary_repository.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/date_range.dart';
@@ -22,6 +24,14 @@ class _AnniversariesPageState extends State<AnniversariesPage> {
   void initState() {
     super.initState();
     _loadAnniversaries();
+    // 从首页“添加纪念日”入口进入时（autoAdd），直接打开添加对话框。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is Map && args['autoAdd'] == true) {
+        unawaited(_editAnniversary());
+      }
+    });
   }
 
   Future<void> _loadAnniversaries() async {
@@ -196,6 +206,9 @@ class _AnniversariesPageState extends State<AnniversariesPage> {
                             ],
                           ),
                         );
+                        // 等退场动画结束后再释放，否则仍挂载的 TextField
+                        // 下一帧重建时用到已 dispose 的控制器导致红屏。
+                        await waitForDialogDismissal();
                         inputController.dispose();
                         if (newTag == null || newTag.isEmpty) return;
                         setDialogState(() {

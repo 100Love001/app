@@ -18,9 +18,12 @@ import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.onOpenTasks});
+  const HomePage({super.key, this.onOpenTasks, this.onOpenHopes});
 
   final VoidCallback? onOpenTasks;
+
+  /// 跳转到任务页并定位到希望清单分区。
+  final VoidCallback? onOpenHopes;
 
   @override
   HomePageState createState() => HomePageState();
@@ -1009,7 +1012,20 @@ class HomePageState extends State<HomePage> {
                 Flexible(
                   child: InkWell(
                     key: const ValueKey('home-recent-anniversary'),
-                    onTap: () => _openRoute(AppRoutes.anniversaries),
+                    onTap: () {
+                if (nearestAnniversary == null) {
+                  // 没有进行中的纪念日时，从首页“添加纪念日”入口直接打开添加对话框。
+                  Navigator.pushNamed(
+                    context,
+                    AppRoutes.anniversaries,
+                    arguments: const {'autoAdd': true},
+                  ).then((_) {
+                    if (mounted) unawaited(vm.refreshData());
+                  });
+                } else {
+                  _openRoute(AppRoutes.anniversaries);
+                }
+              },
                     borderRadius: BorderRadius.circular(10),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
@@ -1063,6 +1079,10 @@ class HomePageState extends State<HomePage> {
                   const SizedBox(height: 12),
                 ],
                 _buildPointsCard(context),
+                if (vm.hopesInProgress.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _buildHopesCard(context),
+                ],
                 const SizedBox(height: 12),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1294,6 +1314,107 @@ class HomePageState extends State<HomePage> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 希望清单进行中卡片：展示正在推进的希望，名称在上、进度条在下，
+  /// 点击进入任务页的希望清单分区。没有进行中的希望时整卡隐藏。
+  Widget _buildHopesCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hopes = vm.hopesInProgress;
+    return Card(
+      key: const ValueKey('home-hopes-progress'),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: widget.onOpenHopes,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.flag_rounded,
+                    size: 18,
+                    color: scheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '希望清单 · 进行中',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: scheme.primaryContainer.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${hopes.length} 项',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              for (var i = 0; i < hopes.length; i++)
+                Padding(
+                  padding: EdgeInsets.only(top: i == 0 ? 0 : 10),
+                  child: _buildHopeProgressRow(context, hopes[i]),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 单条进行中的希望：名称在上，当前进度（进度条 + 百分比）在下。
+  Widget _buildHopeProgressRow(BuildContext context, HopeProgress hope) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                hope.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${hope.progress}%',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: scheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: hope.progress / 100,
+            minHeight: 6,
+            backgroundColor: scheme.surfaceContainerHighest,
+          ),
+        ),
+      ],
     );
   }
 

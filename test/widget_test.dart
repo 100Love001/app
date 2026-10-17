@@ -331,7 +331,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
-    await tapProfileTile(tester, '基础参数设置');
+    await tapProfileTile(tester, '提醒时间');
 
     expect(find.text('每日小结推送时间'), findsOneWidget);
     expect(find.text('纪念日提醒时间'), findsOneWidget);

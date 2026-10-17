@@ -27,14 +27,49 @@ class ProfilePage extends StatefulWidget {
 class ProfilePageState extends State<ProfilePage> {
   final AppSettingsController _settings = AppSettingsController.instance;
 
+  /// 页头统计（积分余额 / 完成任务 / 记账笔数）；加载失败保持 null 隐藏。
+  ({int points, int completedTasks, int bills})? _stats;
+
   @override
   void initState() {
     super.initState();
     unawaited(_settings.load());
+    unawaited(_loadStats());
   }
 
   void refresh() {
     unawaited(_settings.load());
+    unawaited(_loadStats());
+  }
+
+  Future<void> _loadStats() async {
+    try {
+      final db = await AppDatabase.instance.database;
+      final rows = await Future.wait([
+        db.rawQuery('SELECT COALESCE(SUM(point_value), 0) AS v FROM points'),
+        db.rawQuery('SELECT COUNT(*) AS c FROM daily_task_reward_logs'),
+        db.rawQuery(
+          "SELECT COUNT(*) AS c FROM special_tasks WHERE status_tag = '已完成'",
+        ),
+        db.rawQuery(
+          "SELECT COUNT(*) AS c FROM tasks WHERE status = '已完成'",
+        ),
+        db.rawQuery('SELECT COUNT(*) AS c FROM income_expenses'),
+      ]);
+      int count(Object? value) => int.tryParse('$value') ?? 0;
+      final stats = (
+        points: count(rows[0].first['v']),
+        completedTasks:
+            count(rows[1].first['c']) +
+            count(rows[2].first['c']) +
+            count(rows[3].first['c']),
+        bills: count(rows[4].first['c']),
+      );
+      if (!mounted) return;
+      setState(() => _stats = stats);
+    } catch (_) {
+      // 统计加载失败不打断页面，保持隐藏。
+    }
   }
 
   Future<void> _runSetting(Future<void> Function() action) async {
@@ -183,6 +218,21 @@ class ProfilePageState extends State<ProfilePage> {
     Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page));
   }
 
+  /// 提醒时间磁贴的动态摘要，与提醒时间页的配置实时一致。
+  String get _reminderSubtitle {
+    String hourText(int hour) => hour.toString().padLeft(2, '0');
+    final minutes = _settings.defaultRemindMinutes;
+    final remind = minutes <= 0
+        ? '准点提醒'
+        : minutes % 1440 == 0
+        ? '提前 ${minutes ~/ 1440} 天'
+        : minutes % 60 == 0
+        ? '提前 ${minutes ~/ 60} 小时'
+        : '提前 $minutes 分钟';
+    return '小结 ${hourText(_settings.dailySummaryHour)}:00 · '
+        '纪念日 ${hourText(_settings.anniversaryReminderHour)}:00 · $remind';
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -202,20 +252,12 @@ class ProfilePageState extends State<ProfilePage> {
                 icon: Icons.palette_outlined,
                 color: colorScheme.primary,
                 title: '全局配置',
-                subtitle: '页面背景、主题颜色、字体与系统预设',
-                onTap: () => _open(const AppearanceSettingsPage()),
-              ),
-              _tileDivider(),
-              _navTile(
-                icon: Icons.dashboard_customize_outlined,
-                color: colorScheme.secondary,
-                title: '组件外观配置',
-                subtitle: '卡片、轮播图与顶部组件',
+                subtitle: '主题颜色、深色模式、字体、卡片与按键样式',
                 onTap: () => _open(const AppearanceSettingsPage()),
               ),
             ]),
             const SizedBox(height: 16),
-            _buildSectionTitle('参数设置'),
+            _buildSectionTitle('通用设置'),
             _buildGroupCard([
               _navTile(
                 icon: Icons.sell_outlined,
@@ -225,10 +267,10 @@ class ProfilePageState extends State<ProfilePage> {
               ),
               _tileDivider(),
               _navTile(
-                icon: Icons.stars_outlined,
+                icon: Icons.schedule_outlined,
                 color: colorScheme.tertiary,
-                title: '积分体系',
-                subtitle: '任务奖励、罚金与提醒等通用参数',
+                title: '提醒时间',
+                subtitle: _reminderSubtitle,
                 onTap: () => _open(const PreferenceSettingsPage()),
               ),
               _tileDivider(),
@@ -238,22 +280,6 @@ class ProfilePageState extends State<ProfilePage> {
                 title: '账单体系',
                 subtitle: '记账分类、支出预算与积分兑换比例',
                 onTap: () => _open(const BillingSystemPage()),
-              ),
-              _tileDivider(),
-              _navTile(
-                icon: Icons.tune_rounded,
-                color: colorScheme.primary,
-                title: '基础参数设置',
-                subtitle: '提醒时间与默认提前量',
-                onTap: () => _open(const PreferenceSettingsPage()),
-              ),
-              _tileDivider(),
-              _navTile(
-                icon: Icons.schedule_outlined,
-                color: colorScheme.tertiary,
-                title: '时间设置',
-                subtitle: '提醒时间与默认提前量',
-                onTap: () => _open(const PreferenceSettingsPage()),
               ),
               _tileDivider(),
               SwitchListTile(
@@ -405,49 +431,98 @@ class ProfilePageState extends State<ProfilePage> {
         onTap: _editProfile,
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 31,
-                backgroundColor: colorScheme.primaryContainer,
-                child: Text(
-                  initial,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                    color: colorScheme.onPrimaryContainer,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      style: Theme.of(context).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                    if (_settings.signature.isNotEmpty) ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        _settings.signature,
-                        style: Theme.of(context).textTheme.bodySmall
-                            ?.copyWith(color: colorScheme.onSurfaceVariant),
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 31,
+                    backgroundColor: colorScheme.primaryContainer,
+                    child: Text(
+                      initial,
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: colorScheme.onPrimaryContainer,
                       ),
-                    ],
+                    ),
+                  ),
+                  const SizedBox(width: 15),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        if (_settings.signature.isNotEmpty) ...[
+                          const SizedBox(height: 5),
+                          Text(
+                            _settings.signature,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colorScheme.onSurfaceVariant),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.edit_outlined,
+                    color: colorScheme.onSurfaceVariant,
+                    size: 20,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                height: 44,
+                child: Row(
+                  children: [
+                    _statItem(context, '积分余额', _stats?.points),
+                    _statDivider(colorScheme),
+                    _statItem(context, '完成任务', _stats?.completedTasks),
+                    _statDivider(colorScheme),
+                    _statItem(context, '记账笔数', _stats?.bills),
                   ],
                 ),
-              ),
-              Icon(
-                Icons.edit_outlined,
-                color: colorScheme.onSurfaceVariant,
-                size: 20,
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _statDivider(ColorScheme colorScheme) => Container(
+    width: 1,
+    height: 26,
+    color: colorScheme.outlineVariant.withValues(alpha: 0.6),
+  );
+
+  Widget _statItem(BuildContext context, String label, int? value) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            value == null ? '--' : '$value',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }

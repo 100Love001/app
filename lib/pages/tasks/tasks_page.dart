@@ -98,6 +98,11 @@ class TasksPageState extends State<TasksPage> {
 
   void refresh() => unawaited(_loadTasks());
 
+  /// 供首页“希望清单”卡片直达希望清单分区。
+  void showHopes() {
+    setState(() => _section = _TaskSection.hopes);
+  }
+
   Future<void> _loadTasks() async {
     setState(() {
       _loading = true;

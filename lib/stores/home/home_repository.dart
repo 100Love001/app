@@ -23,8 +23,39 @@ class HomeAnniversary {
   }
 }
 
+/// 首页“希望清单进行中”卡片所需的最小希望数据。
+class HopeProgress {
+  const HopeProgress({required this.hopeId, required this.name, required this.progress});
+
+  final int hopeId;
+  final String name;
+
+  /// 0-100 的完成百分比。
+  final int progress;
+}
+
 class HomeRepository {
   const HomeRepository();
+
+  /// 读取进行中且未满进度的希望，供首页展示当前正在推进的内容。
+  Future<List<HopeProgress>> loadHopesInProgress() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'hopes',
+      columns: ['hope_id', 'name', 'progress'],
+      where: "status = '进行中' AND progress < 100",
+      orderBy: 'update_time DESC, hope_id DESC',
+      limit: 3,
+    );
+    return [
+      for (final row in rows)
+        HopeProgress(
+          hopeId: toInt(row['hope_id']),
+          name: row['name'] as String? ?? '',
+          progress: toInt(row['progress']).clamp(0, 100),
+        ),
+    ];
+  }
 
   /// 读取用户设为“目标”的愿望及其投入进度；未设置或已删除返回 null。
   /// 目标一旦达成（已兑换）也返回 null，首页自动隐藏卡片。

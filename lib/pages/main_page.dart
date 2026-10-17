@@ -58,7 +58,14 @@ class MainPageState extends State<MainPage> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          HomePage(key: _homeKey, onOpenTasks: () => _selectTab(2)),
+          HomePage(
+            key: _homeKey,
+            onOpenTasks: () => _selectTab(2),
+            onOpenHopes: () {
+              _selectTab(2);
+              _tasksKey.currentState?.showHopes();
+            },
+          ),
           FinancePage(key: _financeKey),
           TasksPage(key: _tasksKey),
           RecordsPage(key: _recordsKey),
