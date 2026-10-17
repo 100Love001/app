@@ -17,11 +17,13 @@ class TableSql {
   ''';
 
   // folders 多层文件夹表
+  // book_type：本子类型。cognition=认知本（旧“日记本”迁移归入），diary=日记本。
   static const String createFolders = '''
     CREATE TABLE folders (
       folder_id INTEGER PRIMARY KEY AUTOINCREMENT,
       parent_id INTEGER NULL,
       folder_name TEXT NOT NULL,
+      book_type TEXT NOT NULL DEFAULT 'cognition',
       sort INTEGER NOT NULL DEFAULT 0,
       create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       update_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
@@ -30,12 +32,16 @@ class TableSql {
   ''';
 
   // diaries 日记主表
+  // book_type 与文件夹保持一致，用于跨文件夹检索时隔离认知本/日记本；
+  // content_format：plaintext=纯文本（历史数据），delta=flutter_quill 富文本 JSON。
   static const String createDiaries = '''
     CREATE TABLE diaries (
       diary_id INTEGER PRIMARY KEY AUTOINCREMENT,
       folder_id INTEGER NOT NULL,
       title TEXT NOT NULL,
       content TEXT,
+      book_type TEXT NOT NULL DEFAULT 'cognition',
+      content_format TEXT NOT NULL DEFAULT 'plaintext',
       create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       update_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       FOREIGN KEY (folder_id) REFERENCES folders(folder_id) ON DELETE CASCADE
@@ -67,6 +73,7 @@ class TableSql {
   ''';
 
   // wishes愿望清单
+  // requirement：非必填的完成要求/验收标准。
   static const String createWishes = '''
     CREATE TABLE wishes (
       wish_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +84,7 @@ class TableSql {
       tag TEXT,
       note TEXT,
       content TEXT,
+      requirement TEXT,
       tag_id INTEGER,
       desire INTEGER NOT NULL DEFAULT 0,
       target_date TEXT,
@@ -90,6 +98,7 @@ class TableSql {
   ''';
 
   // hopes希望清单
+  // hope_mode：simple=单条+手动进度（历史行为），steps=文件夹+分步任务。
   static const String createHopes = '''
     CREATE TABLE hopes (
       hope_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +108,8 @@ class TableSql {
       difficulty TEXT NOT NULL DEFAULT '中等',
       tag TEXT,
       content TEXT,
+      requirement TEXT,
+      hope_mode TEXT NOT NULL DEFAULT 'simple',
       tag_id INTEGER,
       desire INTEGER NOT NULL DEFAULT 0,
       deadline TEXT,
@@ -106,6 +117,39 @@ class TableSql {
       redeemed_at TEXT,
       repeat_type TEXT DEFAULT 'none',
       notes TEXT,
+      sort INTEGER NOT NULL DEFAULT 0,
+      create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      update_time TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )
+  ''';
+
+  // hope_steps 希望分步任务（hope_mode='steps' 时使用）
+  static const String createHopeSteps = '''
+    CREATE TABLE hope_steps (
+      step_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      hope_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      content TEXT,
+      requirement TEXT,
+      reward_points INTEGER NOT NULL DEFAULT 0,
+      sort INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT '未进行',
+      completed_at TEXT,
+      create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      update_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (hope_id) REFERENCES hopes(hope_id) ON DELETE CASCADE
+    )
+  ''';
+
+  // problems 问题清单
+  static const String createProblems = '''
+    CREATE TABLE problems (
+      problem_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT '待解决',
+      solution_note TEXT,
+      resolved_at TEXT,
       sort INTEGER NOT NULL DEFAULT 0,
       create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       update_time TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -211,6 +255,7 @@ class TableSql {
       name TEXT NOT NULL,
       content TEXT,
       remark TEXT,
+      requirement TEXT,
       start_time TEXT NOT NULL,
       end_time TEXT NOT NULL,
       task_tag_id INTEGER,
@@ -223,15 +268,34 @@ class TableSql {
     )
   ''';
 
+  // 特殊任务提醒时间表：一条任务可配置多个提前量（分钟，允许负数=准时/延后）。
+  static const String createSpecialTaskReminders = '''
+    CREATE TABLE special_task_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      remind_minutes_before INTEGER NOT NULL DEFAULT 15,
+      UNIQUE(task_id, remind_minutes_before),
+      FOREIGN KEY (task_id) REFERENCES special_tasks(id) ON DELETE CASCADE
+    )
+  ''';
+
+  // task_mode：review=记忆复习型（艾宾浩斯），habit=自定义习惯型。
+  // habit 型使用 repeat_type/repeat_value：
+  //   daily（每天）、weekly（repeat_value='1,3,5' 周几）、
+  //   monthly（repeat_value='15' 每月几号）、interval（repeat_value='3' 间隔天数）。
   static const String createDailyTasks = '''
     CREATE TABLE daily_tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       content TEXT,
       remark TEXT,
+      requirement TEXT,
       start_time TEXT NOT NULL,
       task_tag_id INTEGER,
       status_tag TEXT NOT NULL DEFAULT '未开始',
+      task_mode TEXT NOT NULL DEFAULT 'review',
+      repeat_type TEXT NOT NULL DEFAULT 'daily',
+      repeat_value TEXT,
       next_review_time TEXT,
       review_stage INTEGER NOT NULL DEFAULT 0,
       daily_points INTEGER NOT NULL DEFAULT 0,
@@ -251,6 +315,19 @@ class TableSql {
     )
   ''';
 
+  // 日常任务自定义提醒时间点（小时/分钟），仅 habit 型使用；
+  // review 型沿用全局 9:00/12:00 复习提醒。
+  static const String createDailyTaskReminders = '''
+    CREATE TABLE daily_task_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      hour INTEGER NOT NULL,
+      minute INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(task_id, hour, minute),
+      FOREIGN KEY (task_id) REFERENCES daily_tasks(id) ON DELETE CASCADE
+    )
+  ''';
+
   // task_reviews任务复习记录
   static const String createTaskReviews = '''
     CREATE TABLE task_reviews (
@@ -264,6 +341,7 @@ class TableSql {
   ''';
 
   // income_expenses收支记录
+  // points_deducted：本笔支出同时从积分中抵扣的数量（0 表示不抵扣）。
   static const String createIncomeExpenses = '''
     CREATE TABLE income_expenses (
       record_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +349,7 @@ class TableSql {
       category TEXT NOT NULL,
       amount REAL NOT NULL DEFAULT 0,
       remark TEXT,
+      points_deducted INTEGER NOT NULL DEFAULT 0,
       record_date TEXT NOT NULL,
       create_time TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     )
@@ -322,6 +401,18 @@ class TableSql {
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    )
+  ''';
+
+  /// 特殊语录（时光信箱）：写下话语并设定未来解锁日期，
+  /// 到时间前内容保密，到时间后在首页与通知栏以“特殊礼物”形式展示。
+  static const String createTimeCapsules = '''
+    CREATE TABLE time_capsules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      unlock_date TEXT NOT NULL,
+      opened INTEGER NOT NULL DEFAULT 0,
+      create_time TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     )
   ''';
 
@@ -404,6 +495,8 @@ class TableSql {
     createDiaryAttachments,
     createWishes,
     createHopes,
+    createHopeSteps,
+    createProblems,
     createWishTags,
     createHopeTags,
     createDesireLogs,
@@ -414,8 +507,10 @@ class TableSql {
     createSpecialTaskTags,
     createDailyTaskTags,
     createSpecialTasks,
+    createSpecialTaskReminders,
     createDailyTasks,
     createDailyTaskRewardLogs,
+    createDailyTaskReminders,
     createTaskReviews,
     createIncomeExpenses,
     createFinanceCategories,
@@ -423,6 +518,7 @@ class TableSql {
     createPoints,
     createTags,
     createAppSettings,
+    createTimeCapsules,
     createQuotes,
     createQuoteReplies,
     ...moodTableSql,
