@@ -10,14 +10,20 @@ class EncryptionKeyManager {
   static const _keyLength = 32;
 
   final _secureStorage = const FlutterSecureStorage();
+  String? _cachedKey;
 
   Future<String> getOrCreateKey() async {
+    final cached = _cachedKey;
+    if (cached != null) return cached;
+
     final existing = await _secureStorage.read(key: _storageKey);
-    if (existing != null && existing.isNotEmpty) return existing;
+    if (existing != null && existing.isNotEmpty) {
+      return _cachedKey = existing;
+    }
 
     final key = _generateKey();
     await _secureStorage.write(key: _storageKey, value: key);
-    return key;
+    return _cachedKey = key;
   }
 
   String _generateKey() {

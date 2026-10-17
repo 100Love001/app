@@ -33,6 +33,9 @@ class AppDatabase {
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onConfigure: (db) async {
+        // WAL 模式：读写互不阻塞，崩溃后恢复快，
+        // 避免残留事务回滚导致启动时长时间等锁。
+        await db.execute('PRAGMA journal_mode = WAL');
         // 开启外键约束
         await db.execute('PRAGMA foreign_keys = ON');
       },

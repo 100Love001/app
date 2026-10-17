@@ -244,8 +244,9 @@ class ProfilePageState extends State<ProfilePage> {
         : minutes % 60 == 0
         ? '提前 ${minutes ~/ 60} 小时'
         : '提前 $minutes 分钟';
+    // 显式两行，避免在窄卡片中随机断行（如“钟”字单独成行）。
     return '小结 ${hourText(_settings.dailySummaryHour)}:00 · '
-        '纪念日 ${hourText(_settings.anniversaryReminderHour)}:00 · $remind';
+        '纪念日 ${hourText(_settings.anniversaryReminderHour)}:00\n$remind';
   }
 
   @override
@@ -261,19 +262,19 @@ class ProfilePageState extends State<ProfilePage> {
           children: [
             _buildProfileCard(context),
             const SizedBox(height: 16),
-            _buildSectionTitle('外观设置'),
+            _buildSectionTitle('常用功能'),
+            _buildQuickActions(context),
+            const SizedBox(height: 16),
+            _buildSectionTitle('通用设置'),
             _buildGroupCard([
               _navTile(
                 icon: Icons.palette_outlined,
                 color: colorScheme.primary,
-                title: '全局配置',
+                title: '外观配置',
                 subtitle: '主题颜色、深色模式、字体、卡片与按键样式',
                 onTap: () => _open(const AppearanceSettingsPage()),
               ),
-            ]),
-            const SizedBox(height: 16),
-            _buildSectionTitle('通用设置'),
-            _buildGroupCard([
+              _tileDivider(),
               _navTile(
                 icon: Icons.sell_outlined,
                 color: colorScheme.primary,
@@ -289,14 +290,6 @@ class ProfilePageState extends State<ProfilePage> {
                 onTap: () => _open(const PreferenceSettingsPage()),
               ),
               _tileDivider(),
-              _navTile(
-                icon: Icons.receipt_long_outlined,
-                color: colorScheme.secondary,
-                title: '账单体系',
-                subtitle: '记账分类、支出预算与积分兑换比例',
-                onTap: () => _open(const BillingSystemPage()),
-              ),
-              _tileDivider(),
               SwitchListTile(
                 secondary: _tileIcon(
                   Icons.notifications_outlined,
@@ -309,14 +302,14 @@ class ProfilePageState extends State<ProfilePage> {
               ),
             ]),
             const SizedBox(height: 16),
-            _buildSectionTitle('语录设置'),
+            _buildSectionTitle('语录管理'),
             _buildGroupCard([
               _navTile(
-                icon: Icons.markunread_mailbox_outlined,
-                color: colorScheme.secondary,
-                title: '特殊语录',
-                subtitle: '管理写给未来自己的语录',
-                onTap: () => _open(const TimeCapsulePage()),
+                icon: Icons.format_quote_rounded,
+                color: colorScheme.primary,
+                title: '今日语录',
+                subtitle: '管理每日展示的语录库',
+                onTap: () => _open(const QuoteManagementPage()),
               ),
               _tileDivider(),
               _navTile(
@@ -326,65 +319,183 @@ class ProfilePageState extends State<ProfilePage> {
                 subtitle: '查看用户交互场景的回复记录',
                 onTap: () => _open(const QuoteReplyHistoryPage()),
               ),
-              _tileDivider(),
-              _navTile(
-                icon: Icons.format_quote_rounded,
-                color: colorScheme.primary,
-                title: '今日语录',
-                onTap: () => _open(const QuoteManagementPage()),
-              ),
             ]),
             const SizedBox(height: 16),
-            _buildSectionTitle('数据设置'),
-            _buildGroupCard([
-              _navTile(
-                icon: Icons.insights_rounded,
-                color: colorScheme.primary,
-                title: '数据分析',
-                subtitle: '积分、任务、收支与愿望统计',
-                onTap: () => _open(const DataAnalysisPage()),
-              ),
-              _tileDivider(),
-              _navTile(
-                icon: Icons.backup_outlined,
-                color: colorScheme.secondary,
-                title: '数据备份',
-                subtitle: '创建、恢复和管理备份包',
-                onTap: () => _open(
-                  BackupManagementPage(
-                    onPersonalDataChanged: widget.onPersonalDataChanged,
-                  ),
-                ),
-              ),
-              _tileDivider(),
-              ListTile(
-                leading: _tileIcon(
-                  Icons.delete_forever_outlined,
-                  colorScheme.error,
-                ),
-                title: Text(
-                  '清空个人记录',
-                  style: TextStyle(color: colorScheme.error),
-                ),
-                trailing: Icon(
-                  Icons.chevron_right_rounded,
-                  color: colorScheme.onSurfaceVariant,
-                  size: 22,
-                ),
-                onTap: _clearPersonalData,
-              ),
-              _tileDivider(),
-              ListTile(
-                leading: _tileIcon(Icons.info_outline, colorScheme.primary),
-                title: const Text('版本信息'),
-                trailing: Text(
-                  '1.0.0',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ]),
+            _buildClearDataCard(context),
+            const SizedBox(height: 24),
+            _buildVersionFooter(context),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 常用功能宫格：高频入口前置，降低浏览成本。
+  Widget _buildQuickActions(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final actions = [
+      (
+        Icons.insights_rounded,
+        colorScheme.primary,
+        '数据分析',
+        () => _open(const DataAnalysisPage()),
+      ),
+      (
+        Icons.backup_outlined,
+        colorScheme.secondary,
+        '数据备份',
+        () => _open(
+          BackupManagementPage(
+            onPersonalDataChanged: widget.onPersonalDataChanged,
+          ),
+        ),
+      ),
+      (
+        Icons.receipt_long_outlined,
+        colorScheme.tertiary,
+        '账单体系',
+        () => _open(const BillingSystemPage()),
+      ),
+      (
+        Icons.markunread_mailbox_outlined,
+        colorScheme.primary,
+        '时光胶囊',
+        () => _open(const TimeCapsulePage()),
+      ),
+    ];
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Row(
+          children: [
+            for (final (index, action) in actions.indexed) ...[
+              if (index > 0) const SizedBox(width: 4),
+              Expanded(child: _quickTile(context, action.$1, action.$2, action.$3, action.$4)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _quickTile(
+    BuildContext context,
+    IconData icon,
+    Color color,
+    String label,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelMedium,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 危险操作独立区块，与普通设置隔离，避免误触。
+  Widget _buildClearDataCard(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: colorScheme.errorContainer.withValues(alpha: 0.6),
+        ),
+      ),
+      child: ListTile(
+        leading: _tileIcon(Icons.delete_forever_outlined, colorScheme.error),
+        title: Text(
+          '清空个人记录',
+          style: TextStyle(color: colorScheme.error),
+        ),
+        subtitle: Text(
+          '删除任务、账单、语录等全部个人数据，不可恢复',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        onTap: _clearPersonalData,
+      ),
+    );
+  }
+
+  /// 版本页脚：点击查看关于信息。
+  Widget _buildVersionFooter(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: TextButton(
+        onPressed: _showAbout,
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          foregroundColor: colorScheme.onSurfaceVariant,
+        ),
+        child: Text(
+          '生活规划师 · v1.0.0',
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAbout() {
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('关于生活规划师'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('版本 1.0.0', style: Theme.of(dialogContext).textTheme.bodyMedium),
+            const SizedBox(height: 8),
+            Text(
+              '一款集任务管理、记账、语录、纪念日与数据统计于一体的个人生活管理应用。'
+              '所有数据仅保存在本地设备，可通过数据备份迁移。',
+              style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
+                color: Theme.of(dialogContext).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }

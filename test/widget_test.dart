@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:app/main.dart';
 import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/pages/main_page.dart';
@@ -39,6 +41,74 @@ Future<void> tapProfileTile(WidgetTester tester, String title) async {
 }
 
 void main() {
+  testWidgets('bootstrap shows the loading page while initializing', (
+    tester,
+  ) async {
+    final completer = Completer<void>();
+    await tester.pumpWidget(AppBootstrap(bootstrapFuture: completer.future));
+    await tester.pump();
+
+    expect(find.text('生活手账'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(MyApp), findsNothing);
+
+    // 初始化完成后切换进主界面。
+    completer.complete();
+    await tester.pump();
+    expect(find.byType(MyApp), findsOneWidget);
+  });
+
+  testWidgets('bootstrap enters the main app after initialization', (
+    tester,
+  ) async {
+    await tester.pumpWidget(AppBootstrap(bootstrapFuture: Future.value()));
+    await tester.pump();
+
+    expect(find.byType(MyApp), findsOneWidget);
+  });
+
+  testWidgets('bootstrap shows an error page with retry on failure', (
+    tester,
+  ) async {
+    // ignore() 预挂监听，避免错误 future 被当作未捕获异步错误抛出；
+    // 原 future 仍以错误完成，FutureBuilder 照常收到 error 快照。
+    final failing = Future<void>.error('测试错误')..ignore();
+    await tester.pumpWidget(AppBootstrap(bootstrapFuture: failing));
+    await tester.pump();
+
+    expect(find.text('初始化失败'), findsOneWidget);
+    expect(find.textContaining('测试错误'), findsOneWidget);
+    expect(find.byType(MyApp), findsNothing);
+
+    await tester.tap(find.text('重试'));
+    await tester.pump();
+    expect(find.text('初始化失败'), findsOneWidget);
+  });
+
+  testWidgets('profile version footer opens the about dialog', (tester) async {
+    await tester.pumpWidget(const MyApp());
+    await tester.pump();
+    await tester.tap(find.text('我的'));
+    await pumpFrames(tester);
+
+    final scrollable = find.descendant(
+      of: find.byType(ProfilePage),
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(
+      find.text('生活规划师 · v1.0.0'),
+      300,
+      scrollable: scrollable.first,
+    );
+    await tester.ensureVisible(find.text('生活规划师 · v1.0.0'));
+    await pumpFrames(tester);
+    await tester.tap(find.text('生活规划师 · v1.0.0'));
+    await pumpFrames(tester);
+
+    expect(find.text('关于生活规划师'), findsOneWidget);
+    expect(find.text('版本 1.0.0'), findsOneWidget);
+  });
+
   testWidgets('main page can be opened without duplicate hero tags', (
     tester,
   ) async {
@@ -164,7 +234,7 @@ void main() {
 
     expect(find.text('生活概览'), findsNothing);
     expect(find.text('生活规划师'), findsOneWidget);
-    expect(find.text('全局配置'), findsOneWidget);
+    expect(find.text('外观配置'), findsOneWidget);
     final profileScroll = find.descendant(
       of: find.byType(ProfilePage),
       matching: find.byType(Scrollable),
@@ -177,7 +247,7 @@ void main() {
     expect(find.text('消息与通知'), findsOneWidget);
     await tester.drag(profileScroll.first, const Offset(0, 1000));
     await pumpFrames(tester);
-    await tester.tap(find.text('全局配置'));
+    await tester.tap(find.text('外观配置'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
@@ -387,7 +457,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
-    await tapProfileTile(tester, '特殊语录');
+    await tapProfileTile(tester, '时光胶囊');
 
     expect(find.text('还没有特殊语录'), findsOneWidget);
     await tester.tap(find.text('写语录'));
