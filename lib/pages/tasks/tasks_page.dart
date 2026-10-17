@@ -2,23 +2,22 @@ import 'dart:async';
 
 import 'package:app/constants/app_constants.dart';
 import 'package:app/pages/records/records_page.dart';
+import 'package:app/pages/tasks/task_editor_page.dart';
+import 'package:app/pages/tasks/task_trend_page.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/notifications/local_notification_service.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
+import 'package:app/stores/tasks/task_penalty_service.dart';
 import 'package:app/stores/tasks/task_repository.dart';
-import 'package:app/utils/date_range.dart';
-import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
+import 'package:app/utils/task_component.dart';
 import 'package:app/utils/time.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-enum _TaskSection { special, daily, wishes, hopes }
-
-/// B2：特殊任务提醒的预设提前量（分钟）。0 表示准时提醒。
-const List<int> _specialReminderPresets = [0, 15, 30, 60, 1440, 4320, 10080];
+enum _TaskSection { special, daily, longTerm, wishes, hopes }
 
 /// 提前提醒分钟数 → 选项标签。
 String _reminderLeadLabel(int minutes) {
@@ -48,6 +47,7 @@ class TasksPageState extends State<TasksPage> {
   String? _error;
   List<Map<String, dynamic>> _specialTasks = [];
   List<Map<String, dynamic>> _dailyTasks = [];
+  List<Map<String, dynamic>> _longTasks = [];
   List<Map<String, dynamic>> _dailyTags = [];
   int _carouselIndex = 0;
   String _specialFolder = '进行中';
@@ -104,18 +104,21 @@ class TasksPageState extends State<TasksPage> {
       _error = null;
     });
     try {
-      await PointsService.settleDailyTaskPenalties();
+      // 统一逾期扣分扫描（4 类任务，幂等）：仅在实际产生新扣分时提示。
+      final settled = await TaskPenaltyService.settleAll();
       final repo = TaskRepository.instance;
       final results = await Future.wait([
         repo.loadSpecialTasks(),
         repo.loadDailyTasks(),
         repo.loadDailyTags(),
+        repo.loadLongTermTasks(),
       ]);
       if (!mounted) return;
       setState(() {
         _specialTasks = results[0];
         _dailyTasks = results[1];
         _dailyTags = results[2];
+        _longTasks = results[3];
         _carouselIndex = 0;
         _loading = false;
       });
@@ -132,6 +135,20 @@ class TasksPageState extends State<TasksPage> {
                 .showSnackBar(SnackBar(content: Text('任务已加载，但提醒同步失败：$error')));
           }
         }
+      }
+      // 逾期扣分通知必须在 syncSchedule 之后发送：同步内部会 cancelAll
+      // 重建全部排程，提前发送的临时通知会被一并撤销而永远不可见。
+      if (settled.isNotEmpty && mounted) {
+        final total = settled.fold<int>(0, (sum, item) => sum + item.points);
+        final message =
+            '${settled.length} 个任务逾期未完成，已自动扣除 $total 积分（补完成将自动返还）';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+        await LocalNotificationService.instance.showInfo(
+          title: '任务逾期扣分',
+          body: message,
+        );
       }
     } catch (error) {
       if (!mounted) return;
@@ -174,7 +191,21 @@ class TasksPageState extends State<TasksPage> {
               isToday(task['start_time'] as String?);
         })
         .map((task) => {...task, 'kind': '日常任务'});
-    return [...special, ...daily];
+    final long = _longTasks
+        .where((task) {
+          if (task['status'] == '已完成') return false;
+          return isToday(task['deadline'] as String?);
+        })
+        .map((task) => {
+          ...task,
+          'kind': '长期任务',
+          'name': task['title'],
+          'tag_name': (task['tag'] as String?)?.trim().isNotEmpty == true
+              ? task['tag']
+              : '未分类',
+          'daily_points': task['reward_points'],
+        });
+    return [...special, ...daily, ...long];
   }
 
   Future<void> _completeTask(Map<String, dynamic> task) async {
@@ -298,739 +329,19 @@ class TasksPageState extends State<TasksPage> {
   bool _dailyClaimableToday(Map<String, dynamic> task) =>
       _isHabitTask(task) ? _habitDueToday(task) : _dailyClaimDue(task);
 
-  Future<void> _addTask({
-    required bool special,
-    Map<String, dynamic>? task,
+  /// 打开动态组件任务编辑器；保存成功后刷新列表。
+  Future<void> _openEditor(
+    TaskType type, {
+    Map<String, dynamic>? existing,
   }) async {
-    late final List<Map<String, dynamic>> tags;
-    try {
-      tags = special
-          ? await _queryTags('special_task_tags')
-          : await _queryTags('daily_task_tags');
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('读取任务标签失败：$error')));
-      }
-      return;
-    }
-    if (!mounted) return;
-
-    final nameController = TextEditingController(
-      text: task?['name'] as String? ?? '',
-    );
-    final contentController = TextEditingController(
-      text: task?['content'] as String? ?? '',
-    );
-    final remarkController = TextEditingController(
-      text: task?['remark'] as String? ?? '',
-    );
-    final requirementController = TextEditingController(
-      text: task?['requirement'] as String? ?? '',
-    );
-    final pointsController = TextEditingController(
-      text: task == null
-          ? special
-                ? '10'
-                : '1'
-          : '${task[special ? 'reward_points' : 'daily_points']}',
-    );
-    final penaltyController = TextEditingController(
-      text: task == null ? '0' : '${task['penalty_points'] ?? 0}',
-    );
-    final currentTag = task?['task_tag_id'] as int?;
-    int? selectedTag = tags.any((tag) => tag['id'] == currentTag)
-        ? currentTag
-        : tags.isEmpty
-        ? null
-        : tags.first['id'] as int;
-    DateTime start =
-        DateTime.tryParse('${task?['start_time']}') ?? DateTime.now();
-    DateTime end =
-        DateTime.tryParse('${task?['end_time']}') ??
-        start.add(const Duration(hours: 1));
-    // B2：编辑特殊任务时读回已配置的多档提醒；新建默认用个性化参数中的提前量。
-    var selectedReminders = <int>{
-      AppSettingsController.instance.defaultRemindMinutes,
-    };
-    if (special && task != null) {
-      try {
-        final stored = await TaskRepository.instance.loadSpecialTaskReminders(
-          task['id'] as int,
-        );
-        if (stored.isNotEmpty) selectedReminders = stored.toSet();
-      } catch (_) {
-        // 读取失败保留默认值，不阻塞编辑。
-      }
-    }
-    // B1：日常任务模式（记忆复习型/自定义习惯型）与习惯配置。
-    var habitMode = false;
-    var repeatType = RepeatType.daily;
-    var selectedWeekdays = <int>{};
-    var selectedMonthDays = <int>{};
-    final intervalController = TextEditingController(text: '2');
-    var reminderTimes = <TimeOfDay>[
-      const TimeOfDay(hour: AppConstants.reminderMorningHour, minute: 0),
-    ];
-    if (!special && task != null && task['task_mode'] == 'habit') {
-      habitMode = true;
-      final rule = RepeatRule.fromColumns(
-        task['repeat_type'] as String?,
-        task['repeat_value'] as String?,
-      );
-      repeatType = rule.type;
-      if (repeatType == RepeatType.weekly) {
-        selectedWeekdays = RepeatRule.intList(rule.value).toSet();
-      } else if (repeatType == RepeatType.monthly) {
-        selectedMonthDays = RepeatRule.intList(rule.value).toSet();
-      } else if (repeatType == RepeatType.interval) {
-        intervalController.text = (rule.value ?? '').trim().isEmpty
-            ? '2'
-            : rule.value!.trim();
-      }
-      try {
-        final stored = await TaskRepository.instance.loadDailyTaskReminders(
-          task['id'] as int,
-        );
-        if (stored.isNotEmpty) {
-          reminderTimes = stored
-              .map((time) => TimeOfDay(hour: time.hour, minute: time.minute))
-              .toList();
-        }
-      } catch (_) {
-        // 读取失败保留默认提醒时刻。
-      }
-    }
-    if (!mounted) return;
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(
-            '${task == null ? '添加' : '编辑'}${special ? '特殊任务' : '日常任务'}',
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: '名称 *'),
-                ),
-                TextField(
-                  controller: contentController,
-                  // 随内容自动向下增高（最小 2 行，不设上限）。
-                  minLines: 2,
-                  maxLines: null,
-                  decoration: const InputDecoration(labelText: '内容'),
-                ),
-                TextField(
-                  controller: requirementController,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    labelText: '要求',
-                    helperText: '选填：完成该任务需满足的条件/验收标准',
-                  ),
-                ),
-                TextField(
-                  controller: remarkController,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: const InputDecoration(labelText: '备注'),
-                ),
-                TextField(
-                  controller: pointsController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: special ? '完成奖励积分' : '每日完成积分',
-                    suffixText: '分',
-                  ),
-                ),
-                TextField(
-                  controller: penaltyController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: '未完成扣除积分',
-                    suffixText: '分',
-                    helperText: '任务未完成时扣除的积分',
-                  ),
-                ),
-                if (tags.isEmpty)
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Text('暂无任务标签，将保存为未分类'),
-                    ),
-                  )
-                else
-                  DropdownButtonFormField<int>(
-                    initialValue: selectedTag,
-                    decoration: const InputDecoration(labelText: '任务标签'),
-                    items: tags
-                        .map(
-                          (tag) => DropdownMenuItem<int>(
-                            value: tag['id'] as int,
-                            child: Text(tag['name'] as String),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) =>
-                        setDialogState(() => selectedTag = value),
-                  ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text('开始：${_formatDate(start.toIso8601String())}'),
-                  onTap: () async {
-                    final value = await showDatePicker(
-                      context: context,
-                      initialDate: start,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
-                    );
-                    if (value != null) {
-                      if (!context.mounted) return;
-                      final time = await showTimePicker(
-                        context: context,
-                        initialTime: TimeOfDay.fromDateTime(start),
-                      );
-                      if (!context.mounted) return;
-                      final selectedTime =
-                          time ?? TimeOfDay.fromDateTime(start);
-                      setDialogState(() {
-                        start = DateTime(
-                          value.year,
-                          value.month,
-                          value.day,
-                          selectedTime.hour,
-                          selectedTime.minute,
-                        );
-                        if (!special) {
-                          end = start;
-                        } else if (end.isBefore(start)) {
-                          end = DateTime(
-                            start.year,
-                            start.month,
-                            start.day,
-                            23,
-                            59,
-                          );
-                        }
-                      });
-                    }
-                  },
-                ),
-                // B1：日常任务支持两种模式。
-                if (!special) ...[
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: EdgeInsets.only(top: 8, bottom: 4),
-                      child: Text('任务模式'),
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('记忆复习型'),
-                        selected: !habitMode,
-                        onSelected: (_) =>
-                            setDialogState(() => habitMode = false),
-                      ),
-                      ChoiceChip(
-                        label: const Text('自定义习惯型'),
-                        selected: habitMode,
-                        onSelected: (_) =>
-                            setDialogState(() => habitMode = true),
-                      ),
-                    ],
-                  ),
-                  if (!habitMode)
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 4),
-                        child: Text(
-                          '按艾宾浩斯曲线安排复习，到期可领取每日积分',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ),
-                  if (habitMode) ...[
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: EdgeInsets.only(top: 8, bottom: 4),
-                        child: Text('重复规则'),
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        for (final entry in const [
-                          (RepeatType.daily, '每天'),
-                          (RepeatType.weekly, '每周'),
-                          (RepeatType.monthly, '每月'),
-                          (RepeatType.interval, '间隔天数'),
-                        ])
-                          ChoiceChip(
-                            label: Text(entry.$2),
-                            selected: repeatType == entry.$1,
-                            onSelected: (_) =>
-                                setDialogState(() => repeatType = entry.$1),
-                          ),
-                      ],
-                    ),
-                    if (repeatType == RepeatType.weekly)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Wrap(
-                          spacing: 6,
-                          children: [
-                            for (var weekday = 1; weekday <= 7; weekday++)
-                              FilterChip(
-                                label: Text(
-                                  const [
-                                    '一',
-                                    '二',
-                                    '三',
-                                    '四',
-                                    '五',
-                                    '六',
-                                    '日',
-                                  ][weekday - 1],
-                                ),
-                                selected: selectedWeekdays.contains(weekday),
-                                onSelected: (checked) => setDialogState(() {
-                                  if (checked) {
-                                    selectedWeekdays.add(weekday);
-                                  } else {
-                                    selectedWeekdays.remove(weekday);
-                                  }
-                                }),
-                              ),
-                          ],
-                        ),
-                      ),
-                    if (repeatType == RepeatType.monthly)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Wrap(
-                          spacing: 4,
-                          runSpacing: 0,
-                          children: [
-                            for (var day = 1; day <= 31; day++)
-                              FilterChip(
-                                label: Text('$day'),
-                                selected: selectedMonthDays.contains(day),
-                                onSelected: (checked) => setDialogState(() {
-                                  if (checked) {
-                                    selectedMonthDays.add(day);
-                                  } else {
-                                    selectedMonthDays.remove(day);
-                                  }
-                                }),
-                              ),
-                          ],
-                        ),
-                      ),
-                    if (repeatType == RepeatType.interval)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: TextField(
-                          controller: intervalController,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: '每隔多少天打卡一次',
-                            suffixText: '天',
-                          ),
-                        ),
-                      ),
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: EdgeInsets.only(top: 10, bottom: 4),
-                        child: Text('提醒时间点（可添加多个）'),
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        for (
-                          var index = 0;
-                          index < reminderTimes.length;
-                          index++
-                        )
-                          Chip(
-                            label: Text(reminderTimes[index].format(context)),
-                            onDeleted: reminderTimes.length <= 1
-                                ? null
-                                : () => setDialogState(
-                                    () => reminderTimes.removeAt(index),
-                                  ),
-                          ),
-                        ActionChip(
-                          avatar: const Icon(Icons.add_alarm, size: 18),
-                          label: const Text('添加时间'),
-                          onPressed: () async {
-                            final picked = await showTimePicker(
-                              context: context,
-                              initialTime: const TimeOfDay(hour: 9, minute: 0),
-                            );
-                            if (picked != null) {
-                              final exists = reminderTimes.any(
-                                (time) =>
-                                    time.hour == picked.hour &&
-                                    time.minute == picked.minute,
-                              );
-                              if (!exists) {
-                                setDialogState(() => reminderTimes.add(picked));
-                              }
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-                if (special)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('结束：${_formatDate(end.toIso8601String())}'),
-                    onTap: () async {
-                      final firstDate = DateTime(
-                        start.year,
-                        start.month,
-                        start.day,
-                      );
-                      final lastDate = DateTime(2100);
-                      final initialEnd = clampDateToRange(
-                        end,
-                        firstDate,
-                        lastDate,
-                      );
-                      final value = await showDatePicker(
-                        context: context,
-                        initialDate: initialEnd,
-                        firstDate: firstDate,
-                        lastDate: lastDate,
-                      );
-                      if (value != null) {
-                        if (!context.mounted) return;
-                        final time = await showTimePicker(
-                          context: context,
-                          initialTime: TimeOfDay.fromDateTime(end),
-                        );
-                        if (!context.mounted) return;
-                        final selectedTime =
-                            time ?? TimeOfDay.fromDateTime(end);
-                        setDialogState(
-                          () => end = DateTime(
-                            value.year,
-                            value.month,
-                            value.day,
-                            selectedTime.hour,
-                            selectedTime.minute,
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                // B2：特殊任务支持多档提前提醒（含准时/自定义）。
-                if (special) ...[
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: EdgeInsets.only(top: 8, bottom: 4),
-                      child: Text('提醒时间（可多选）'),
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      for (final minutes in _specialReminderPresets)
-                        FilterChip(
-                          label: Text(_reminderLeadLabel(minutes)),
-                          selected: selectedReminders.contains(minutes),
-                          onSelected: (checked) {
-                            setDialogState(() {
-                              if (checked) {
-                                selectedReminders.add(minutes);
-                              } else {
-                                selectedReminders.remove(minutes);
-                              }
-                            });
-                          },
-                        ),
-                      // 非预设的自定义提前量，可单独取消。
-                      for (final minutes
-                          in selectedReminders
-                              .where(
-                                (value) =>
-                                    !_specialReminderPresets.contains(value),
-                              )
-                              .toList()
-                            ..sort())
-                        Chip(
-                          label: Text(_reminderLeadLabel(minutes)),
-                          onDeleted: () => setDialogState(
-                            () => selectedReminders.remove(minutes),
-                          ),
-                        ),
-                      ActionChip(
-                        avatar: const Icon(Icons.add, size: 18),
-                        label: const Text('自定义'),
-                        onPressed: () async {
-                          final custom = await _askCustomReminder(context);
-                          if (custom != null) {
-                            setDialogState(() => selectedReminders.add(custom));
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                if (nameController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(dialogContext)
-                      .showSnackBar(const SnackBar(content: Text('请输入任务名称')));
-                  return;
-                }
-                final points = int.tryParse(pointsController.text.trim());
-                if (points == null || points < 0) {
-                  ScaffoldMessenger.of(
-                    dialogContext,
-                  ).showSnackBar(const SnackBar(content: Text('请输入有效的非负积分')));
-                  return;
-                }
-                final penalty =
-                    int.tryParse(penaltyController.text.trim()) ?? 0;
-                if (penalty < 0) {
-                  ScaffoldMessenger.of(dialogContext)
-                      .showSnackBar(const SnackBar(content: Text('扣除积分不能为负数')));
-                  return;
-                }
-                if (special && end.isBefore(start)) {
-                  ScaffoldMessenger.of(
-                    dialogContext,
-                  ).showSnackBar(const SnackBar(content: Text('结束时间不能早于开始时间')));
-                  return;
-                }
-                // B1：习惯型配置校验。
-                String? repeatValue;
-                if (!special && habitMode) {
-                  if (repeatType == RepeatType.weekly &&
-                      selectedWeekdays.isEmpty) {
-                    ScaffoldMessenger.of(
-                      dialogContext,
-                    ).showSnackBar(const SnackBar(content: Text('请至少选择一个星期')));
-                    return;
-                  }
-                  if (repeatType == RepeatType.monthly &&
-                      selectedMonthDays.isEmpty) {
-                    ScaffoldMessenger.of(
-                      dialogContext,
-                    ).showSnackBar(const SnackBar(content: Text('请至少选择一个日期')));
-                    return;
-                  }
-                  if (repeatType == RepeatType.interval) {
-                    final days = int.tryParse(intervalController.text.trim());
-                    if (days == null || days < 1) {
-                      ScaffoldMessenger.of(dialogContext).showSnackBar(
-                        const SnackBar(content: Text('请输入有效的间隔天数（至少 1 天）')),
-                      );
-                      return;
-                    }
-                    repeatValue = '$days';
-                  } else if (repeatType == RepeatType.weekly) {
-                    repeatValue = RepeatRule.encode(selectedWeekdays.toList());
-                  } else if (repeatType == RepeatType.monthly) {
-                    repeatValue = RepeatRule.encode(selectedMonthDays.toList());
-                  }
-                  if (reminderTimes.isEmpty) {
-                    ScaffoldMessenger.of(dialogContext).showSnackBar(
-                      const SnackBar(content: Text('请至少添加一个提醒时间点')),
-                    );
-                    return;
-                  }
-                }
-                try {
-                  final repo = TaskRepository.instance;
-                  if (special) {
-                    final values = {
-                      'name': nameController.text.trim(),
-                      'content': contentController.text.trim(),
-                      'requirement': requirementController.text.trim(),
-                      'remark': remarkController.text.trim(),
-                      'start_time': start.toIso8601String(),
-                      'end_time': end.toIso8601String(),
-                      'task_tag_id': selectedTag,
-                      'reward_points': points,
-                      'penalty_points': penalty,
-                    };
-                    await repo.saveSpecialTask(
-                      values,
-                      id: task?['id'] as int?,
-                      remindMinutesBefore: selectedReminders,
-                    );
-                  } else {
-                    final values = {
-                      'name': nameController.text.trim(),
-                      'content': contentController.text.trim(),
-                      'requirement': requirementController.text.trim(),
-                      'remark': remarkController.text.trim(),
-                      'start_time': start.toIso8601String(),
-                      'task_tag_id': selectedTag,
-                      'daily_points': points,
-                      'penalty_points': penalty,
-                      // B1：模式与重复规则。
-                      'task_mode': habitMode ? 'habit' : 'review',
-                      'repeat_type': habitMode ? repeatType.name : 'daily',
-                      'repeat_value': habitMode ? repeatValue : null,
-                      if (task != null && toInt(task['review_stage']) == 0)
-                        'next_review_time': start.toIso8601String(),
-                    };
-                    await repo.saveDailyTask(
-                      values,
-                      id: task?['id'] as int?,
-                      // 习惯型写入多个提醒点；切回复习型则清空旧提醒。
-                      reminders: habitMode
-                          ? reminderTimes
-                                .map(
-                                  (time) =>
-                                      (hour: time.hour, minute: time.minute),
-                                )
-                                .toList()
-                          : const [],
-                    );
-                  }
-                  if (dialogContext.mounted) {
-                    Navigator.pop(dialogContext, true);
-                  }
-                } catch (error) {
-                  if (dialogContext.mounted) {
-                    ScaffoldMessenger.of(dialogContext)
-                        .showSnackBar(SnackBar(content: Text('保存任务失败：$error')));
-                  }
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => TaskEditorPage(
+          args: TaskEditorArgs(type: type, existing: existing),
         ),
       ),
     );
-    // Wait for the dialog's reverse animation before disposing its field
-    // controllers or rebuilding the page that owns the dialog route.
-    await waitForDialogDismissal();
-    nameController.dispose();
-    contentController.dispose();
-    remarkController.dispose();
-    requirementController.dispose();
-    pointsController.dispose();
-    penaltyController.dispose();
-    intervalController.dispose();
     if (saved == true && mounted) await _loadTasks();
-  }
-
-  /// B2：自定义提前提醒（天/小时/分钟组合），返回总分钟数。
-  Future<int?> _askCustomReminder(BuildContext context) {
-    final dayController = TextEditingController(text: '0');
-    final hourController = TextEditingController(text: '0');
-    final minuteController = TextEditingController(text: '30');
-    return showDialog<int>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('自定义提前提醒'),
-        content: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: dayController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '天'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: hourController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '小时'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: minuteController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '分钟'),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final days = int.tryParse(dayController.text.trim()) ?? 0;
-              final hours = int.tryParse(hourController.text.trim()) ?? 0;
-              final minutes = int.tryParse(minuteController.text.trim()) ?? 0;
-              if (days < 0 ||
-                  hours < 0 ||
-                  minutes < 0 ||
-                  hours > 23 ||
-                  minutes > 59 ||
-                  days > 365) {
-                ScaffoldMessenger.of(dialogContext)
-                  ..clearSnackBars()
-                  ..showSnackBar(
-                    const SnackBar(
-                      content: Text('请输入有效时间（天 0-365、小时 0-23、分钟 0-59）'),
-                    ),
-                  );
-                return;
-              }
-              final total = days * 1440 + hours * 60 + minutes;
-              if (total <= 0) {
-                ScaffoldMessenger.of(dialogContext)
-                  ..clearSnackBars()
-                  ..showSnackBar(const SnackBar(content: Text('提前时间需大于 0')));
-                return;
-              }
-              Navigator.pop(dialogContext, total);
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<List<Map<String, dynamic>>> _queryTags(String table) async {
-    if (table == 'special_task_tags') {
-      return TaskRepository.instance.loadSpecialTags();
-    }
-    return TaskRepository.instance.loadDailyTags();
   }
 
   Future<void> _startSpecialTask(Map<String, dynamic> task) async {
@@ -1098,6 +409,9 @@ class TasksPageState extends State<TasksPage> {
         ? _specialStatus(task)
         : task['status_tag'] as String;
     final rewardClaimedToday = !isSpecial && _dailyRewardClaimedToday(task);
+    final componentDoc = TaskComponentDocument.decode(
+      task['component_json'] as String?,
+    );
     // B2：详情中展示该特殊任务的提醒安排。
     var reminderText = '';
     if (isSpecial) {
@@ -1270,6 +584,18 @@ class TasksPageState extends State<TasksPage> {
                     icon: const Icon(Icons.edit_outlined),
                     label: const Text('编辑'),
                   ),
+                  if (componentDoc.has(ComponentType.weight))
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'weight'),
+                      icon: const Icon(Icons.monitor_weight_outlined),
+                      label: const Text('体重趋势'),
+                    ),
+                  if (componentDoc.has(ComponentType.mood))
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'mood'),
+                      icon: const Icon(Icons.mood_outlined),
+                      label: const Text('心情趋势'),
+                    ),
                   if (!isSpecial)
                     OutlinedButton.icon(
                       onPressed: () => Navigator.pop(context, 'history'),
@@ -1304,10 +630,26 @@ class TasksPageState extends State<TasksPage> {
         }
         break;
       case 'edit':
-        await _addTask(special: isSpecial, task: task);
+        await _openEditor(
+          isSpecial
+              ? TaskType.shortTerm
+              : _isHabitTask(task)
+              ? TaskType.habit
+              : TaskType.daily,
+          existing: task,
+        );
         break;
       case 'history':
         if (!isSpecial) await _showDailyTaskHistory(task);
+        break;
+      case 'weight':
+      case 'mood':
+        await _openTrend(
+          taskKind: isSpecial ? 'special' : 'daily',
+          taskId: toInt(task['id']),
+          taskTitle: '${task['name']}',
+          metric: action == 'weight' ? TrendMetric.weight : TrendMetric.mood,
+        );
         break;
       case 'delete':
         await _deleteTask(task);
@@ -1436,14 +778,30 @@ class TasksPageState extends State<TasksPage> {
       appBar: AppBar(
         title: const Text('任务'),
         actions:
-            _section == _TaskSection.special || _section == _TaskSection.daily
+            _section == _TaskSection.special ||
+                _section == _TaskSection.daily ||
+                _section == _TaskSection.longTerm
             ? [
-                PopupMenuButton<String>(
+                PopupMenuButton<TaskType>(
                   tooltip: '添加任务',
-                  onSelected: (value) => _addTask(special: value == 'special'),
+                  onSelected: (type) => _openEditor(type),
                   itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'special', child: Text('添加特殊任务')),
-                    PopupMenuItem(value: 'daily', child: Text('添加日常任务')),
+                    PopupMenuItem(
+                      value: TaskType.shortTerm,
+                      child: Text('添加特殊任务'),
+                    ),
+                    PopupMenuItem(
+                      value: TaskType.daily,
+                      child: Text('添加日常任务'),
+                    ),
+                    PopupMenuItem(
+                      value: TaskType.habit,
+                      child: Text('添加习惯任务'),
+                    ),
+                    PopupMenuItem(
+                      value: TaskType.longTerm,
+                      child: Text('添加长期任务'),
+                    ),
                   ],
                   icon: const Icon(Icons.add),
                 ),
@@ -1484,6 +842,7 @@ class TasksPageState extends State<TasksPage> {
                         const SizedBox(height: 12),
                         if (_section == _TaskSection.special) _buildSpecial(),
                         if (_section == _TaskSection.daily) _buildDaily(),
+                        if (_section == _TaskSection.longTerm) _buildLongTerm(),
                       ],
                     ),
                   ),
@@ -1501,6 +860,7 @@ class TasksPageState extends State<TasksPage> {
           for (final entry in const [
             (_TaskSection.special, '特殊任务'),
             (_TaskSection.daily, '日常任务'),
+            (_TaskSection.longTerm, '长期任务'),
             (_TaskSection.wishes, '愿望清单'),
             (_TaskSection.hopes, '希望清单'),
           ])
@@ -1547,10 +907,16 @@ class TasksPageState extends State<TasksPage> {
             onPageChanged: (index) => setState(() => _carouselIndex = index),
             itemBuilder: (context, index) => _TodayTaskCard(
               task: tasks[index],
-              onTap: () => _showTaskDetails(tasks[index]),
-              onComplete: () => _completeTask(tasks[index]),
+              onTap: () => tasks[index]['kind'] == '长期任务'
+                  ? _showLongTaskDetails(tasks[index])
+                  : _showTaskDetails(tasks[index]),
+              onComplete: () => tasks[index]['kind'] == '长期任务'
+                  ? _completeLongTask(tasks[index])
+                  : _completeTask(tasks[index]),
               canComplete: tasks[index]['kind'] == '特殊任务'
                   ? _specialStatus(tasks[index]) == '进行中'
+                  : tasks[index]['kind'] == '长期任务'
+                  ? tasks[index]['status'] != '已完成'
                   : tasks[index]['status_tag'] == '进行中' &&
                         _dailyClaimableToday(tasks[index]) &&
                         !_dailyRewardClaimedToday(tasks[index]),
@@ -1572,7 +938,7 @@ class TasksPageState extends State<TasksPage> {
                 decoration: BoxDecoration(
                   color: index == _carouselIndex
                       ? Theme.of(context).colorScheme.primary
-                      : Colors.grey.shade300,
+                      : Theme.of(context).colorScheme.outlineVariant,
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
@@ -1580,6 +946,341 @@ class TasksPageState extends State<TasksPage> {
           ),
       ],
     );
+  }
+
+  // ================= 长期任务（tasks 表 task_type='long'）=================
+
+  /// 长期任务是否已逾期（开启扣分且过截止时间未完成）。
+  bool _longOverdue(Map<String, dynamic> task) {
+    if (task['status'] == '已完成') return false;
+    if (toInt(task['enable_penalty'] ?? 1) != 1) return false;
+    if (toInt(task['penalty_points']) <= 0) return false;
+    final deadline = DateTime.tryParse('${task['deadline']}');
+    return deadline != null && deadline.isBefore(DateTime.now());
+  }
+
+  /// 复习型日常任务是否处于逾期窗口（与扣分服务口径一致：逾期 > 1 天）。
+  bool _dailyOverdue(Map<String, dynamic> task) {
+    if (_isHabitTask(task)) return false;
+    if (task['status_tag'] != '进行中') return false;
+    if (toInt(task['enable_penalty'] ?? 1) != 1) return false;
+    if (toInt(task['penalty_points']) <= 0) return false;
+    final review = DateTime.tryParse('${task['next_review_time']}');
+    if (review == null) return false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return today.difference(
+      DateTime(review.year, review.month, review.day),
+    ).inDays > 1;
+  }
+
+  /// 特殊任务是否已逾期未完成。
+  bool _specialOverdue(Map<String, dynamic> task) =>
+      task['status_tag'] != '已完成' &&
+      toInt(task['enable_penalty'] ?? 1) == 1 &&
+      toInt(task['penalty_points']) > 0 &&
+      _specialStatus(task) == '已结束';
+
+  Widget _buildLongTerm() {
+    if (_longTasks.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.flag_outlined,
+        message: '暂无长期任务，点击右上角 + 添加',
+      );
+    }
+    final active = _longTasks
+        .where((task) => task['status'] != '已完成')
+        .toList();
+    final finished = _longTasks
+        .where((task) => task['status'] == '已完成')
+        .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final task in active) _buildLongTaskTile(task),
+        if (finished.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text('已完成', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 4),
+          for (final task in finished) _buildLongTaskTile(task),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLongTaskTile(Map<String, dynamic> task) {
+    final completed = task['status'] == '已完成';
+    final overdue = !completed && _longOverdue(task);
+    final deadline = DateTime.tryParse('${task['deadline']}');
+    final titleColor = overdue
+        ? Theme.of(context).colorScheme.error
+        : null;
+    return ListTile(
+      onTap: () => _showLongTaskDetails(task),
+      leading: IconButton(
+        tooltip: completed ? '已完成' : '完成长期任务',
+        onPressed: completed ? null : () => _completeLongTask(task),
+        icon: Icon(
+          completed ? Icons.check_circle : Icons.radio_button_unchecked,
+          color: overdue && !completed
+              ? Theme.of(context).colorScheme.error
+              : null,
+        ),
+      ),
+      title: Row(
+        children: [
+          if (overdue)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                size: 18,
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          Expanded(
+            child: Text(
+              '${task['title']}',
+              style: TextStyle(
+                color: titleColor,
+                decoration: completed ? TextDecoration.lineThrough : null,
+              ),
+            ),
+          ),
+        ],
+      ),
+      subtitle: Text(
+        '截止 ${deadline == null ? '未设置' : DateFormat('yyyy-MM-dd HH:mm').format(deadline)}'
+        ' · ${(task['tag'] as String?)?.trim().isNotEmpty == true ? task['tag'] : '未分类'}'
+        ' · 奖励 +${toInt(task['reward_points'])} 分'
+        '${overdue ? ' · 逾期扣 ${toInt(task['penalty_points'])} 分' : ''}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: overdue
+            ? TextStyle(color: Theme.of(context).colorScheme.error)
+            : null,
+      ),
+      trailing: PopupMenuButton<String>(
+        tooltip: '更多操作',
+        onSelected: (value) async {
+          switch (value) {
+            case 'edit':
+              await _openEditor(TaskType.longTerm, existing: task);
+            case 'delete':
+              await _deleteLongTask(task);
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'edit', child: Text('编辑')),
+          PopupMenuItem(value: 'delete', child: Text('删除')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _completeLongTask(Map<String, dynamic> task) async {
+    try {
+      final reward = await PointsService.completeLongTermTask(
+        toInt(task['task_id']),
+      );
+      await _loadTasks();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            reward == null
+                ? '任务已完成'
+                : reward > 0
+                ? '长期任务完成，获得 $reward 积分（逾期扣分已返还）'
+                : '长期任务已完成',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('完成任务失败：$error')));
+    }
+  }
+
+  Future<void> _deleteLongTask(Map<String, dynamic> task) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('删除长期任务'),
+        content: Text('确定删除“${task['title']}”吗？子任务与体重/心情记录会一并删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await TaskRepository.instance.deleteLongTermTask(toInt(task['task_id']));
+      await _loadTasks();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('删除任务失败：$error')));
+    }
+  }
+
+  Future<void> _showLongTaskDetails(Map<String, dynamic> task) async {
+    final doc = TaskComponentDocument.decode(
+      task['component_json'] as String?,
+    );
+    final deadline = DateTime.tryParse('${task['deadline']}');
+    final completed = task['status'] == '已完成';
+    final overdue = !completed && _longOverdue(task);
+    if (!mounted) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 4, 24, 32),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${task['title']}',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: overdue ? Theme.of(context).colorScheme.error : null,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const _DetailLine(label: '任务类型', value: '长期任务'),
+              _DetailLine(
+                label: '任务标签',
+                value: (task['tag'] as String?)?.trim().isNotEmpty == true
+                    ? '${task['tag']}'
+                    : '未分类',
+              ),
+              _DetailLine(
+                label: '当前状态',
+                value: completed
+                    ? '已完成'
+                    : overdue
+                    ? '已逾期（已扣 ${toInt(task['penalty_points'])} 积分/待扣）'
+                    : '${task['status'] ?? '进行中'}',
+              ),
+              _DetailLine(
+                label: '截止时间',
+                value: deadline == null
+                    ? '未设置'
+                    : DateFormat('yyyy-MM-dd HH:mm').format(deadline),
+              ),
+              _DetailLine(
+                label: '完成奖励',
+                value: '${toInt(task['reward_points'])} 积分',
+              ),
+              if (toInt(task['penalty_points']) > 0)
+                _DetailLine(
+                  label: '逾期扣分',
+                  value:
+                      '${toInt(task['penalty_points'])} 积分'
+                      '（${toInt(task['enable_penalty'] ?? 1) == 1 ? '已开启' : '已关闭'}）',
+                ),
+              if ((task['note'] as String?)?.trim().isNotEmpty == true) ...[
+                const SizedBox(height: 8),
+                Text('${task['note']}'),
+              ],
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: completed
+                      ? null
+                      : () => Navigator.pop(context, 'complete'),
+                  icon: const Icon(Icons.check),
+                  label: Text(completed ? '已完成' : '完成任务'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(context, 'edit'),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('编辑'),
+                  ),
+                  if (doc.has(ComponentType.weight))
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'weight'),
+                      icon: const Icon(Icons.monitor_weight_outlined),
+                      label: const Text('体重趋势'),
+                    ),
+                  if (doc.has(ComponentType.mood))
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'mood'),
+                      icon: const Icon(Icons.mood_outlined),
+                      label: const Text('心情趋势'),
+                    ),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(context, 'delete'),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('删除'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'complete':
+        await _completeLongTask(task);
+      case 'edit':
+        await _openEditor(TaskType.longTerm, existing: task);
+      case 'delete':
+        await _deleteLongTask(task);
+      case 'weight':
+      case 'mood':
+        await _openTrend(
+          taskKind: 'long',
+          taskId: toInt(task['task_id']),
+          taskTitle: '${task['title']}',
+          metric: action == 'weight' ? TrendMetric.weight : TrendMetric.mood,
+        );
+      case null:
+        break;
+    }
+  }
+
+  Future<void> _openTrend({
+    required String taskKind,
+    required int taskId,
+    required String taskTitle,
+    required TrendMetric metric,
+  }) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TaskTrendPage(
+          taskKind: taskKind,
+          taskId: taskId,
+          taskTitle: taskTitle,
+          metric: metric,
+        ),
+      ),
+    );
+    await _loadTasks();
   }
 
   Widget _buildSpecial() {
@@ -1748,6 +1449,10 @@ class TasksPageState extends State<TasksPage> {
     final rewardClaimedToday = !isSpecial && _dailyRewardClaimedToday(task);
     final claimDue = !isSpecial && _dailyClaimableToday(task);
     final completed = isSpecial && status == '已完成';
+    final overdue = isSpecial
+        ? _specialOverdue(task)
+        : _dailyOverdue(task);
+    final overdueColor = Theme.of(context).colorScheme.error;
     final canComplete =
         status == '进行中' && (isSpecial || (!rewardClaimedToday && claimDue));
     return ListTile(
@@ -1766,19 +1471,24 @@ class TasksPageState extends State<TasksPage> {
         icon: Icon(
           completed || rewardClaimedToday
               ? Icons.check_circle
+              : overdue
+              ? Icons.error_outline
               : Icons.radio_button_unchecked,
+          color: overdue ? overdueColor : null,
         ),
       ),
       title: Text(
         task['name'] as String,
         style: TextStyle(
+          color: overdue ? overdueColor : null,
           decoration: completed ? TextDecoration.lineThrough : null,
         ),
       ),
       subtitle: Text(
-        '${isHabit ? '${_repeatRuleOf(task).displayText} · ' : ''}${task['tag_name'] ?? '未分类'} · ${task['content'] ?? '暂无内容'} · ${rewardClaimedToday ? '今日已领取' : '每日 +${toInt(task[isSpecial ? 'reward_points' : 'daily_points'])} 分'}',
+        '${isHabit ? '${_repeatRuleOf(task).displayText} · ' : ''}${task['tag_name'] ?? '未分类'} · ${task['content'] ?? '暂无内容'} · ${rewardClaimedToday ? '今日已领取' : '每日 +${toInt(task[isSpecial ? 'reward_points' : 'daily_points'])} 分'}${overdue ? ' · 已逾期' : ''}',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
+        style: overdue ? TextStyle(color: overdueColor) : null,
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1953,7 +1663,9 @@ class _TodayTaskCard extends StatelessWidget {
                           onPressed: onComplete,
                           icon: const Icon(Icons.check, size: 16),
                           label: Text(
-                            isSpecial ? '完成' : '领取',
+                            isSpecial || task['kind'] == '长期任务'
+                                ? '完成'
+                                : '领取',
                             style: const TextStyle(fontSize: 12),
                           ),
                           style: FilledButton.styleFrom(
@@ -2013,6 +1725,8 @@ class _TodayTaskCard extends StatelessWidget {
                     const Spacer(),
                     if (isSpecial)
                       _buildTimeInfo(context, colorScheme)
+                    else if (task['kind'] == '长期任务')
+                      _buildDeadlineInfo(context, colorScheme)
                     else
                       _buildReviewStageInfo(context, colorScheme),
                   ],
@@ -2030,9 +1744,14 @@ class _TodayTaskCard extends StatelessWidget {
     final end = DateTime.tryParse('${task['end_time']}');
     if (start == null || end == null) return const SizedBox.shrink();
     final now = DateTime.now();
-    final totalDuration = end.difference(start).inDays;
-    final elapsed = now.difference(start).inDays;
-    final remaining = (totalDuration - elapsed).clamp(0, totalDuration);
+    // 小时粒度计算：同日起止（如 8:00-22:00）用天会恒显示“剩余 0 天”。
+    final totalHours = end.difference(start).inHours;
+    if (totalHours <= 0) return const SizedBox.shrink();
+    final elapsed = now.difference(start).inHours;
+    final remaining = (totalHours - elapsed).clamp(0, totalHours);
+    final label = remaining >= 24
+        ? '剩余 ${remaining ~/ 24} 天'
+        : '剩余 $remaining 小时';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2043,7 +1762,31 @@ class _TodayTaskCard extends StatelessWidget {
         ),
         const SizedBox(width: 3),
         Text(
-          '剩余 $remaining 天',
+          label,
+          style: Theme.of(context).textTheme.labelSmall
+              ?.copyWith(color: colorScheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+
+  /// 长期任务没有复习阶段概念，今日卡片展示截止信息。
+  /// 今日卡片仅包含截止日为今天的长期任务。
+  Widget _buildDeadlineInfo(BuildContext context, ColorScheme colorScheme) {
+    final deadline = DateTime.tryParse('${task['deadline']}');
+    if (deadline == null) return const SizedBox.shrink();
+    final hasTime = deadline.hour != 0 || deadline.minute != 0;
+    final label = hasTime
+        ? '今天 ${deadline.hour.toString().padLeft(2, '0')}:'
+            '${deadline.minute.toString().padLeft(2, '0')} 截止'
+        : '今天截止';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.event, size: 13, color: colorScheme.onSurfaceVariant),
+        const SizedBox(width: 3),
+        Text(
+          label,
           style: Theme.of(context).textTheme.labelSmall
               ?.copyWith(color: colorScheme.onSurfaceVariant),
         ),
@@ -2097,15 +1840,21 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.onSurfaceVariant;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(28),
         child: Center(
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 40, color: Colors.grey),
+              Icon(icon, size: 40, color: color.withValues(alpha: 0.55)),
               const SizedBox(height: 8),
-              Text(message),
+              Text(
+                message,
+                style: theme.textTheme.bodyMedium?.copyWith(color: color),
+              ),
             ],
           ),
         ),

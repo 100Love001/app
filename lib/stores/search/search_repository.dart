@@ -2,6 +2,21 @@ import 'package:app/stores/database/add_database.dart';
 
 enum SearchScope { all, tags, tasks, wishes, hopes, finance, diaries, moods }
 
+/// 任务范围（SearchScope.tasks）下的状态筛选。
+enum TaskStatusFilter {
+  /// 不过滤。
+  all,
+
+  /// 进行中（长期任务含未开始）。
+  active,
+
+  /// 已完成。
+  done,
+
+  /// 逾期中：截止已过且未完成（日常复习按下次复习日计）。
+  overdue,
+}
+
 class SearchRepository {
   SearchRepository._();
   static final SearchRepository instance = SearchRepository._();
@@ -9,6 +24,7 @@ class SearchRepository {
   Future<List<Map<String, Object?>>> search({
     required String keyword,
     SearchScope scope = SearchScope.all,
+    TaskStatusFilter taskStatusFilter = TaskStatusFilter.all,
   }) async {
     final db = await AppDatabase.instance.database;
     // 必须先转义反斜杠本身，否则后续 % _ 产生的转义符会被二次解释。
@@ -41,6 +57,38 @@ class SearchRepository {
         }());
       }
     }
+    // 状态筛选仅在「任务」范围生效（全局范围隐藏筛选条，不参与过滤）。
+    // 日期阈值由本机生成，无注入风险；ISO 字符串与前缀日期比较时，
+    // 同日带 T 的串总是更大，天然实现「当天不算逾期」。
+    final statusFilter =
+        scope == SearchScope.tasks ? taskStatusFilter : TaskStatusFilter.all;
+    final nowIso = DateTime.now().toIso8601String();
+    final todayKey = nowIso.substring(0, 10);
+    final specialStatus = switch (statusFilter) {
+      TaskStatusFilter.active => "AND special_tasks.status_tag = '进行中'",
+      TaskStatusFilter.done => "AND special_tasks.status_tag = '已完成'",
+      TaskStatusFilter.overdue =>
+        "AND special_tasks.status_tag != '已完成' "
+            "AND special_tasks.end_time < '$nowIso'",
+      TaskStatusFilter.all => '',
+    };
+    final dailyStatus = switch (statusFilter) {
+      TaskStatusFilter.active => "AND daily_tasks.status_tag = '进行中'",
+      TaskStatusFilter.done => "AND daily_tasks.status_tag = '已完成'",
+      TaskStatusFilter.overdue =>
+        "AND daily_tasks.status_tag = '进行中' "
+            "AND daily_tasks.task_mode = 'review' "
+            "AND daily_tasks.next_review_time < '$todayKey'",
+      TaskStatusFilter.all => '',
+    };
+    final longStatus = switch (statusFilter) {
+      TaskStatusFilter.active => "AND tasks.status != '已完成'",
+      TaskStatusFilter.done => "AND tasks.status = '已完成'",
+      TaskStatusFilter.overdue =>
+        "AND tasks.status != '已完成' "
+            "AND tasks.deadline IS NOT NULL AND tasks.deadline < '$nowIso'",
+      TaskStatusFilter.all => '',
+    };
     if (scope == SearchScope.all || scope == SearchScope.tasks) {
       futures.add(() async {
         final rows = await db.rawQuery(
@@ -48,12 +96,15 @@ class SearchRepository {
           SELECT special_tasks.id AS record_id,
             special_tasks.name AS title,
             COALESCE(special_tasks.content, special_tasks.remark, '') AS description,
-            COALESCE(special_task_tags.name, '未分类') AS tag_name
+            COALESCE(special_task_tags.name, '未分类') AS tag_name,
+            special_tasks.status_tag AS status,
+            special_tasks.end_time AS date
           FROM special_tasks
           LEFT JOIN special_task_tags ON special_tasks.task_tag_id = special_task_tags.id
           WHERE special_tasks.is_deleted = 0 AND (
             special_tasks.name LIKE ? ESCAPE '\\' OR special_tasks.content LIKE ? ESCAPE '\\'
             OR special_tasks.remark LIKE ? ESCAPE '\\' OR special_task_tags.name LIKE ? ESCAPE '\\')
+            $specialStatus
           ''',
           [pattern, pattern, pattern, pattern],
         );
@@ -65,16 +116,37 @@ class SearchRepository {
           SELECT daily_tasks.id AS record_id,
             daily_tasks.name AS title,
             COALESCE(daily_tasks.content, daily_tasks.remark, '') AS description,
-            COALESCE(daily_task_tags.name, '未分类') AS tag_name
+            COALESCE(daily_task_tags.name, '未分类') AS tag_name,
+            daily_tasks.status_tag AS status
           FROM daily_tasks
           LEFT JOIN daily_task_tags ON daily_tasks.task_tag_id = daily_task_tags.id
           WHERE daily_tasks.is_deleted = 0 AND (
             daily_tasks.name LIKE ? ESCAPE '\\' OR daily_tasks.content LIKE ? ESCAPE '\\'
             OR daily_tasks.remark LIKE ? ESCAPE '\\' OR daily_task_tags.name LIKE ? ESCAPE '\\')
+            $dailyStatus
           ''',
           [pattern, pattern, pattern, pattern],
         );
         return rows.map((row) => {...row, 'result_type': '日常任务'}).toList();
+      }());
+      futures.add(() async {
+        final rows = await db.rawQuery(
+          '''
+          SELECT tasks.task_id AS record_id,
+            tasks.title AS title,
+            COALESCE(tasks.note, '') AS description,
+            COALESCE(tasks.tag, '') AS tag_name,
+            tasks.status AS status,
+            tasks.deadline AS date
+          FROM tasks
+          WHERE tasks.task_type = 'long' AND (
+            tasks.title LIKE ? ESCAPE '\\' OR tasks.note LIKE ? ESCAPE '\\'
+            OR tasks.tag LIKE ? ESCAPE '\\')
+            $longStatus
+          ''',
+          [pattern, pattern, pattern],
+        );
+        return rows.map((row) => {...row, 'result_type': '长期任务'}).toList();
       }());
     }
     if (scope == SearchScope.all || scope == SearchScope.wishes) {

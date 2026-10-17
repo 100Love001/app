@@ -28,7 +28,7 @@ class AppDatabase {
     final password = await EncryptionKeyManager.instance.getOrCreateKey();
     return openDatabase(
       path,
-      version: 19,
+      version: 20,
       password: password,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
@@ -121,6 +121,8 @@ class AppDatabase {
         'daily_task_reminders',
         'daily_task_reward_logs',
         'special_task_reminders',
+        'task_weight_records',
+        'task_mood_records',
         'task_reviews',
         'hope_steps',
         'hope_progress_logs',

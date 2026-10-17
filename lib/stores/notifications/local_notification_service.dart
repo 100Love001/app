@@ -91,8 +91,21 @@ class LocalNotificationService {
       );
     } catch (_) {
       // 某些设备/模拟器返回的时区名（如 "GMT"）不在 tz 数据库中，
-      // 回退到 Etc/UTC，避免通知初始化整体失败。
-      timezone.setLocalLocation(timezone.getLocation('Etc/UTC'));
+      // 按系统偏移量选择 Etc/GMT 时区（tz 库为 POSIX 反号约定：
+      // UTC+8 对应 Etc/GMT-8），避免通知时间整体偏移。
+      final offset = DateTime.now().timeZoneOffset;
+      var name = 'Etc/UTC';
+      final hours = offset.inMinutes ~/ 60;
+      final minutes = offset.inMinutes % 60;
+      if (minutes == 0 && hours >= -12 && hours <= 14 && hours != 0) {
+        name = 'Etc/GMT${hours > 0 ? '-' : '+'}${hours.abs()}';
+      }
+      try {
+        timezone.setLocalLocation(timezone.getLocation(name));
+      } catch (_) {
+        // 仍失败时回退 UTC，避免通知初始化整体失败。
+        timezone.setLocalLocation(timezone.getLocation('Etc/UTC'));
+      }
     }
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -150,6 +163,8 @@ class LocalNotificationService {
           await PointsService.claimHabitTaskReward(taskId: taskId, date: now);
         case 'special':
           await PointsService.completeSpecialTask(taskId);
+        case 'long':
+          await PointsService.completeLongTermTask(taskId);
       }
       // 刷新今日待办（移除已领项）与排程。
       await syncSchedule();
@@ -189,6 +204,41 @@ class LocalNotificationService {
   Future<void> syncSchedule() {
     return _runScheduleUpdate();
   }
+
+  /// 立即展示一条业务通知（如逾期扣分提示）。
+  /// 通知功能未开启或插件未初始化时静默忽略，不影响业务流程。
+  Future<void> showInfo({
+    required String title,
+    required String body,
+    String payload = 'tasks',
+  }) async {
+    try {
+      if (!AppSettingsController.instance.notificationsEnabled) return;
+      await initialize();
+      _transientNotificationId =
+          (_transientNotificationId + 1) % 100000;
+      await _plugin.show(
+        id: AppConstants.transientNotificationIdBase +
+            _transientNotificationId,
+        title: title,
+        body: body,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'personal_reminders',
+            '生活提醒',
+            channelDescription: '任务、纪念日和日常记账提醒',
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+          ),
+        ),
+        payload: payload,
+      );
+    } catch (_) {
+      // 通知失败不阻断扣分/返还主流程。
+    }
+  }
+
+  int _transientNotificationId = 0;
 
   Future<void> _runScheduleUpdate() async {
     final previous = _scheduleQueue;
@@ -247,6 +297,15 @@ class LocalNotificationService {
     // B1：习惯型任务的多个提醒时刻。
     final dailyReminders =
         await TaskRepository.instance.loadAllDailyTaskReminders();
+    // 长期任务：截止当天进今日待办，并在截止时刻推送一次到期提醒。
+    final longTasks = await db.rawQuery(
+      '''
+      SELECT task_id, title, deadline
+      FROM tasks
+      WHERE task_type = 'long' AND status != '已完成'
+        AND deadline IS NOT NULL
+      ''',
+    );
     final now = DateTime.now();
     var dueTodayCount = 0;
     final todayPending = <String>[];
@@ -478,6 +537,31 @@ class LocalNotificationService {
         at: reminderAt,
         payload: 'tasks',
       );
+    }
+
+    for (final task in longTasks) {
+      final deadline = DateTime.tryParse('${task['deadline']}');
+      if (deadline == null) continue;
+      final taskId = task['task_id'] as int;
+      final deadlineDay = DateTime(
+        deadline.year,
+        deadline.month,
+        deadline.day,
+      );
+      if (deadlineDay == todayStart) {
+        todayPending.add('${task['title']}（今日截止）');
+        todayItems.add((id: taskId, kind: 'long'));
+      }
+      // 截止时刻未到：排一条到期提醒；已过则不补打扰（页面标红 + 扣分提示）。
+      if (deadline.isAfter(now)) {
+        await _schedule(
+          id: AppConstants.longTaskNotificationIdOffset + taskId,
+          title: '长期任务到期',
+          body: '今天截止：${task['title']}',
+          at: deadline,
+          payload: 'tasks',
+        );
+      }
     }
 
     var financeReminder = DateTime(

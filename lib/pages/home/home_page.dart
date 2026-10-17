@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app/constants/app_constants.dart';
 import 'package:app/routes/app_routes.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/database/points_service.dart';
@@ -7,10 +8,12 @@ import 'package:app/stores/home/home_repository.dart';
 import 'package:app/stores/home/quote_repository.dart';
 import 'package:app/stores/home/time_capsule_repository.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
+import 'package:app/stores/tasks/task_component_repository.dart';
 import 'package:app/stores/tasks/task_repository.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
+import 'package:app/utils/time.dart';
 import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
 
@@ -33,6 +36,8 @@ class HomePageState extends State<HomePage> {
   Object? _overviewError;
   bool _overviewLoading = true;
   List<Map<String, dynamic>> _todayTasks = [];
+  WeightRecord? _latestWeight;
+  MoodRecord? _latestMood;
 
   @override
   void initState() {
@@ -368,6 +373,9 @@ class HomePageState extends State<HomePage> {
         PointsService.getPointsBalance(),
         TaskRepository.instance.loadSpecialTasks(),
         TaskRepository.instance.loadDailyTasks(),
+        TaskRepository.instance.loadLongTermTasks(),
+        TaskComponentRepository.instance.latestWeight(),
+        TaskComponentRepository.instance.latestMood(),
       ]);
       final today = DateTime.now();
       final todayStart = DateTime(today.year, today.month, today.day);
@@ -391,7 +399,11 @@ class HomePageState extends State<HomePage> {
                 ) &&
                 !todayStart.isAfter(DateTime(end.year, end.month, end.day));
           })
-          .map((task) => {...task, 'kind': '特殊任务'});
+          .map((task) => {
+            ...task,
+            'kind': '特殊任务',
+            'daily_points': task['reward_points'],
+          });
       final dailyTasks = (result[2] as List<Map<String, dynamic>>)
           .where((task) {
             if (task['status_tag'] != '进行中') return false;
@@ -407,10 +419,24 @@ class HomePageState extends State<HomePage> {
                 isToday(task['start_time']);
           })
           .map((task) => {...task, 'kind': '日常任务'});
+      final longTasks = (result[3] as List<Map<String, dynamic>>)
+          .where((task) {
+            if (task['status'] == '已完成') return false;
+            return isToday(task['deadline']);
+          })
+          .map((task) => {
+            ...task,
+            'kind': '长期任务',
+            'id': task['task_id'],
+            'name': task['title'],
+            'daily_points': task['reward_points'],
+          });
       if (!mounted) return;
       setState(() {
         _pointsBalance = result[0] as int;
-        _todayTasks = [...specialTasks, ...dailyTasks];
+        _todayTasks = [...specialTasks, ...dailyTasks, ...longTasks];
+        _latestWeight = result[4] as WeightRecord?;
+        _latestMood = result[5] as MoodRecord?;
         _overviewLoading = false;
       });
     } catch (error) {
@@ -1041,8 +1067,9 @@ class HomePageState extends State<HomePage> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Expanded(child: SizedBox.shrink()),
                     Expanded(child: _buildTodayTasksCard(context)),
+                    const SizedBox(width: 12),
+                    Expanded(child: _buildHealthCard(context)),
                   ],
                 ),
               ],
@@ -1188,38 +1215,93 @@ class HomePageState extends State<HomePage> {
 
   Widget _buildPointsCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final balance = _overviewError != null || _overviewLoading
+        ? '--'
+        : '${_pointsBalance ?? 0}';
     return Card(
       key: const ValueKey('home-points-balance'),
       clipBehavior: Clip.antiAlias,
       color: scheme.primaryContainer,
-      child: ListTile(
-        leading: Icon(
-          Icons.stars_rounded,
-          color: scheme.onPrimaryContainer,
-          size: 28,
-        ),
-        title: Text(
-          '当前积分总数',
-          style: TextStyle(color: scheme.onPrimaryContainer),
-        ),
-        subtitle: Text(
-          _overviewError != null
-              ? '积分读取失败：$_overviewError'
-              : _overviewLoading
-              ? '正在读取…'
-              : '${_pointsBalance ?? 0} 分',
-          style: TextStyle(color: scheme.onPrimaryContainer),
-        ),
-        trailing: Icon(
-          Icons.chevron_right_rounded,
-          color: scheme.onPrimaryContainer,
-        ),
+      child: InkWell(
         onTap: widget.onOpenTasks,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: scheme.onPrimaryContainer.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.stars_rounded,
+                  color: scheme.onPrimaryContainer,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '当前积分总数',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: scheme.onPrimaryContainer.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          balance,
+                          style: Theme.of(context).textTheme.displaySmall
+                              ?.copyWith(
+                                color: scheme.onPrimaryContainer,
+                                fontWeight: FontWeight.w800,
+                                height: 1.1,
+                              ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          '分',
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(color: scheme.onPrimaryContainer),
+                        ),
+                      ],
+                    ),
+                    if (_overviewError != null)
+                      Text(
+                        '积分读取失败，下拉重试',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onPrimaryContainer.withValues(
+                            alpha: 0.7,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: scheme.onPrimaryContainer,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildTodayTasksCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tasks = _overviewError != null
+        ? const <Map<String, dynamic>>[]
+        : _todayTasks;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -1245,6 +1327,23 @@ class HomePageState extends State<HomePage> {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                   ),
+                  if (!_overviewLoading && tasks.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.primaryContainer.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${tasks.length} 项',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -1255,29 +1354,488 @@ class HomePageState extends State<HomePage> {
                 )
               else if (_overviewLoading)
                 Text('正在读取…', style: Theme.of(context).textTheme.bodySmall)
-              else if (_todayTasks.isEmpty)
-                Text('今天没有任务', style: Theme.of(context).textTheme.bodySmall)
+              else if (tasks.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text(
+                    '今天没有任务，点击去创建一个吧',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                )
               else
-                for (final task in _todayTasks.take(4))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 5),
-                    child: Text(
-                      '• ${task['name'] ?? '未命名任务'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                for (final task in tasks.take(4))
+                  _buildTodayTaskRow(context, task),
+              if (tasks.length > 4 && !_overviewLoading)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '还有 ${tasks.length - 4} 项 · 点击查看全部',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.5),
                     ),
                   ),
-              if (_todayTasks.length > 4 && !_overviewLoading)
-                Text(
-                  '还有 ${_todayTasks.length - 4} 项',
-                  style: Theme.of(context).textTheme.labelSmall,
                 ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 首页单条今日任务：类型图标 + 名称 + 奖励分 + 一键完成。
+  Widget _buildTodayTaskRow(BuildContext context, Map<String, dynamic> task) {
+    final scheme = Theme.of(context).colorScheme;
+    final kind = task['kind'] as String? ?? '日常任务';
+    final isHabit = kind == '日常任务' && task['task_mode'] == 'habit';
+    final done = kind != '长期任务' && toInt(task['reward_claimed_today']) == 1;
+    final points = toInt(task['daily_points']);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Icon(
+            _taskKindIcon(kind, isHabit),
+            size: 15,
+            color: _taskKindColor(context, kind, isHabit),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '${task['name'] ?? '未命名任务'}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                decoration: done ? TextDecoration.lineThrough : null,
+              ),
+            ),
+          ),
+          if (points > 0 && !done) ...[
+            const SizedBox(width: 4),
+            Text(
+              '+$points',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          const SizedBox(width: 6),
+          if (done)
+            const Icon(
+              Icons.check_circle_rounded,
+              size: 20,
+              color: Colors.green,
+            )
+          else
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: IconButton(
+                tooltip: kind == '长期任务' ? '标记完成' : '完成/打卡',
+                padding: EdgeInsets.zero,
+                iconSize: 20,
+                icon: Icon(
+                  Icons.check_circle_outline,
+                  color: scheme.primary,
+                ),
+                onPressed: () => unawaited(_completeHomeTask(task)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  IconData _taskKindIcon(String kind, bool isHabit) => switch (kind) {
+    '特殊任务' => Icons.bolt_rounded,
+    '长期任务' => Icons.flag_rounded,
+    _ => isHabit ? Icons.repeat_rounded : Icons.event_repeat_rounded,
+  };
+
+  Color _taskKindColor(BuildContext context, String kind, bool isHabit) =>
+      switch (kind) {
+        '特殊任务' => Colors.orange.shade600,
+        '长期任务' => Colors.purple.shade400,
+        _ => isHabit ? Colors.teal.shade500 : Theme.of(context).colorScheme.primary,
+      };
+
+  /// 首页一键完成任务：与任务页完成逻辑一致，自动领取积分并返还逾期扣分。
+  Future<void> _completeHomeTask(Map<String, dynamic> task) async {
+    final kind = task['kind'] as String? ?? '日常任务';
+    final id = toInt(task['id']);
+    if (kind == '长期任务') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('完成长期任务'),
+          content: Text(
+            '完成「${task['name'] ?? '长期任务'}」？完成后发放奖励积分，'
+            '已扣除的逾期积分会自动返还。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('完成'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    try {
+      final reward = switch (kind) {
+        '特殊任务' => await PointsService.completeSpecialTask(id),
+        '长期任务' => await PointsService.completeLongTermTask(id),
+        _ => task['task_mode'] == 'habit'
+            ? await PointsService.claimHabitTaskReward(
+                taskId: id,
+                date: DateTime.now(),
+              )
+            : await PointsService.claimDailyTaskReward(
+                taskId: id,
+                date: DateTime.now(),
+              ),
+      };
+      await _loadHomeOverview();
+      if (!mounted) return;
+      final message = reward == null
+          ? (kind == '特殊任务' ? '任务已完成' : '今日奖励已领取，或任务当前不可领取')
+          : reward > 0
+          ? (kind == '长期任务'
+                ? '长期任务完成，获得 $reward 积分（逾期扣分已返还）'
+                : '完成成功，获得 $reward 积分')
+          : '任务已完成';
+      _showMessage(message);
+    } catch (error) {
+      _showMessage('更新任务失败：$error');
+    }
+  }
+
+  /// 右侧健康卡：体重 + 心情最新值，支持一键快捷记录。
+  Widget _buildHealthCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final weight = _latestWeight;
+    final mood = _latestMood;
+    final moodLevel = MoodLevel.fromScore(mood?.level);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.monitor_heart_outlined,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 18,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '体重 · 心情',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            _buildHealthTile(
+              context,
+              icon: Icons.monitor_weight_outlined,
+              iconColor: Colors.blue.shade500,
+              label: '体重',
+              value: _overviewLoading
+                  ? '…'
+                  : weight == null
+                  ? '未记录'
+                  : '${weight.weight.toStringAsFixed(1)} kg',
+              hint: weight == null ? '点击录入' : weight.recordDate,
+              onTap: _overviewLoading ? null : () => unawaited(_quickRecordWeight()),
+            ),
+            Divider(
+              height: 16,
+              color: scheme.onSurface.withValues(alpha: 0.08),
+            ),
+            _buildHealthTile(
+              context,
+              icon: moodLevel.icon,
+              iconColor: _moodColor(moodLevel),
+              label: '心情',
+              value: _overviewLoading
+                  ? '…'
+                  : mood == null
+                  ? '未记录'
+                  : moodLevel.label,
+              hint: mood == null ? '点击录入' : mood.recordDate,
+              onTap: _overviewLoading ? null : () => unawaited(_quickRecordMood()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHealthTile(
+    BuildContext context, {
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required String hint,
+    required VoidCallback? onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Icon(icon, size: 19, color: iconColor),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Icon(
+                  Icons.add_circle_outline,
+                  size: 16,
+                  color: scheme.primary,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hint,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.45),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _moodColor(MoodLevel level) => switch (level) {
+    MoodLevel.veryLow || MoodLevel.low => Colors.red.shade400,
+    MoodLevel.neutral => Colors.amber.shade600,
+    _ => Colors.green.shade500,
+  };
+
+  /// 尚无任何体重/心情记录时，引导用户先在任务里添加对应组件。
+  Future<void> _showRecordGuide(String componentLabel) async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('还没有「$componentLabel」记录'),
+        content: Text(
+          '先在任务编辑器中给任意任务添加「$componentLabel」组件并录入一条数据，'
+          '之后就可以在这里快捷记录了。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('知道了'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('去任务页'),
+          ),
+        ],
+      ),
+    );
+    if (go == true && mounted) widget.onOpenTasks?.call();
+  }
+
+  /// 快捷记录体重：写入最近使用的体重任务（与趋势图同源）。
+  Future<void> _quickRecordWeight() async {
+    final target = _latestWeight;
+    if (target == null) {
+      await _showRecordGuide('体重记录');
+      return;
+    }
+    final controller = TextEditingController(
+      text: target.weight.toStringAsFixed(1),
+    );
+    final value = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('记录体重'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (target.taskName.isNotEmpty)
+              Text(
+                '将保存到任务「${target.taskName}」的体重曲线',
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: '今日体重（kg）',
+                suffixText: 'kg',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    await waitForDialogDismissal();
+    controller.dispose();
+    final parsed = double.tryParse(value ?? '');
+    if (parsed == null) return;
+    if (parsed <= 0 || parsed > 600) {
+      _showMessage('体重需在 0-600 kg 之间');
+      return;
+    }
+    try {
+      await TaskComponentRepository.instance.addWeight(
+        taskKind: target.taskKind,
+        taskId: target.taskId,
+        recordDate: TimeUtil.toDateKey(DateTime.now()),
+        weight: parsed,
+      );
+      await _loadHomeOverview();
+      if (mounted) _showMessage('已记录今日体重 ${parsed.toStringAsFixed(1)} kg');
+    } catch (error) {
+      _showMessage('记录体重失败：$error');
+    }
+  }
+
+  /// 快捷记录心情：选择 1-5 级心情 + 可选备注，写入最近使用的心情任务。
+  Future<void> _quickRecordMood() async {
+    final target = _latestMood;
+    if (target == null) {
+      await _showRecordGuide('心情记录');
+      return;
+    }
+    var selected = target.level;
+    final noteController = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('记录心情'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (target.taskName.isNotEmpty)
+                Text(
+                  '将保存到任务「${target.taskName}」的情绪曲线',
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
+                ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final level in MoodLevel.values)
+                    ChoiceChip(
+                      label: Text(level.label),
+                      selected: selected == level.score,
+                      onSelected: (_) =>
+                          setDialogState(() => selected = level.score),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: noteController,
+                maxLength: 50,
+                decoration: const InputDecoration(
+                  labelText: '备注（可选）',
+                  hintText: '今天感觉怎么样？',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    await waitForDialogDismissal();
+    final note = noteController.text;
+    noteController.dispose();
+    if (saved != true) return;
+    try {
+      await TaskComponentRepository.instance.addMood(
+        taskKind: target.taskKind,
+        taskId: target.taskId,
+        recordDate: TimeUtil.toDateKey(DateTime.now()),
+        level: selected,
+        note: note,
+      );
+      await _loadHomeOverview();
+      if (mounted) _showMessage('已记录今日心情');
+    } catch (error) {
+      _showMessage('记录心情失败：$error');
+    }
   }
 
   Widget _buildLoadError(BuildContext context) {
@@ -1298,220 +1856,6 @@ class HomePageState extends State<HomePage> {
       ),
     );
   }
-}
-
-class _CarouselSection<T> extends StatefulWidget {
-  const _CarouselSection({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.accent,
-    required this.items,
-    required this.emptyMessage,
-    required this.emptyHint,
-    required this.itemBuilder,
-    required this.onViewAll,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final Color accent;
-  final List<T> items;
-  final String emptyMessage;
-  final String emptyHint;
-  final Widget Function(BuildContext, T) itemBuilder;
-  final VoidCallback onViewAll;
-
-  @override
-  State<_CarouselSection<T>> createState() => _CarouselSectionState<T>();
-}
-
-class _CarouselSectionState<T> extends State<_CarouselSection<T>> {
-  final PageController _controller = PageController(viewportFraction: 0.91);
-  int _page = 0;
-  Timer? _autoAdvanceTimer;
-  bool _animating = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _configureAutoAdvance();
-  }
-
-  @override
-  void didUpdateWidget(covariant _CarouselSection<T> oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.items.length != oldWidget.items.length) {
-      _page = 0;
-      if (_controller.hasClients) _controller.jumpToPage(0);
-      _configureAutoAdvance();
-    }
-  }
-
-  void _configureAutoAdvance() {
-    _autoAdvanceTimer?.cancel();
-    if (widget.items.length < 2) return;
-    _autoAdvanceTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!mounted ||
-          !_controller.hasClients ||
-          widget.items.length < 2 ||
-          _animating) {
-        return;
-      }
-      _animating = true;
-      final nextPage = (_page + 1) % widget.items.length;
-      _controller
-          .animateToPage(
-            nextPage,
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeInOut,
-          )
-          .then((_) => _animating = false);
-    });
-  }
-
-  @override
-  void dispose() {
-    _autoAdvanceTimer?.cancel();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final count = widget.items.isEmpty ? 1 : widget.items.length;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: widget.accent.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(13),
-              ),
-              child: Icon(widget.icon, color: widget.accent, size: 21),
-            ),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.title,
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  Text(
-                    widget.subtitle,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-            TextButton(onPressed: widget.onViewAll, child: const Text('查看全部')),
-          ],
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 150,
-          child: PageView.builder(
-            controller: _controller,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: count,
-            onPageChanged: (page) => setState(() => _page = page),
-            itemBuilder: (context, index) => Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: widget.items.isEmpty
-                  ? _EmptySlide(
-                      icon: widget.icon,
-                      title: widget.emptyMessage,
-                      hint: widget.emptyHint,
-                    )
-                  : widget.itemBuilder(context, widget.items[index]),
-            ),
-          ),
-        ),
-        if (widget.items.length > 1) ...[
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              for (var i = 0; i < widget.items.length; i++)
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  margin: const EdgeInsets.symmetric(horizontal: 3),
-                  width: i == _page ? 17 : 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: i == _page
-                        ? widget.accent
-                        : widget.accent.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _SlideCard extends StatelessWidget {
-  const _SlideCard({required this.accent, required this.child});
-
-  final Color accent;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(
-      alpha: Theme.of(context).brightness == Brightness.dark ? 0.55 : 0.68,
-    ),
-    borderRadius: BorderRadius.circular(18),
-    child: InkWell(
-      borderRadius: BorderRadius.circular(18),
-      child: Padding(padding: const EdgeInsets.all(16), child: child),
-    ),
-  );
-}
-
-class _EmptySlide extends StatelessWidget {
-  const _EmptySlide({
-    required this.icon,
-    required this.title,
-    required this.hint,
-  });
-
-  final IconData icon;
-  final String title;
-  final String hint;
-
-  @override
-  Widget build(BuildContext context) => _SlideCard(
-    accent: Theme.of(context).colorScheme.primary,
-    child: Row(
-      children: [
-        Icon(icon, size: 35, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 5),
-              Text(hint, style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
 }
 
 class _DetailItem {

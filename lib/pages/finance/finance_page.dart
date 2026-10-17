@@ -4,6 +4,7 @@ import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/finance/finance_repository.dart';
 import 'package:app/utils/budget_period.dart';
+import 'package:app/utils/csv_exporter.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/time.dart';
@@ -44,6 +45,67 @@ class FinancePageState extends State<FinancePage> {
   }
 
   String _date(DateTime value) => TimeUtil.toDateKey(value);
+
+  /// 导出 CSV：账单或积分流水，生成后调起系统分享，
+  /// 用户可保存到手机存储或发送给他人。
+  Future<void> _exportCsv({required bool pointsFlow}) async {
+    final rows = pointsFlow ? _pointRecordsAll : _records;
+    if (_loading || rows.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂无可导出的数据')));
+      return;
+    }
+    try {
+      final stamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      if (pointsFlow) {
+        await CsvExporter.shareCsv(
+          fileName: '积分流水_$stamp.csv',
+          subject: '生活手账积分流水',
+          rows: [
+            ['时间', '动作', '对象', '积分变动', '说明'],
+            for (final record in rows)
+              [
+                CsvExporter.normalizeTime(record['create_time']),
+                '${record['operation_type'] ?? ''}',
+                '${record['source_name'] ?? ''}',
+                toInt(record['point_value']),
+                '${record['remark'] ?? ''}',
+              ],
+          ],
+        );
+      } else {
+        await CsvExporter.shareCsv(
+          fileName: '收支账单_$stamp.csv',
+          subject: '生活手账收支账单',
+          rows: [
+            ['记账日期', '类型', '分类', '金额', '备注', '抵扣积分', '创建时间'],
+            for (final record in rows)
+              [
+                '${record['record_date'] ?? ''}',
+                '${record['type'] ?? ''}',
+                '${record['category'] ?? ''}',
+                toDouble(record['amount']).toStringAsFixed(2),
+                '${record['remark'] ?? ''}',
+                toInt(record['points_deducted']),
+                CsvExporter.normalizeTime(record['create_time']),
+              ],
+          ],
+        );
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已生成 CSV（共 ${rows.length} 条）')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('导出失败：$error')));
+      }
+    }
+  }
 
   /// 进入财务页时结算所有支出分类「已结束周期」的结余/超支积分。
   /// 单分类失败不阻断页面加载（结算记录未写入，下次进入自动重试）。
@@ -426,6 +488,15 @@ class FinancePageState extends State<FinancePage> {
               onPressed: _loading ? null : () => _showRecordEditor(),
               icon: const Icon(Icons.add),
             ),
+          PopupMenuButton<bool>(
+            tooltip: '导出数据',
+            icon: const Icon(Icons.ios_share),
+            onSelected: (pointsFlow) => _exportCsv(pointsFlow: pointsFlow),
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: false, child: Text('导出账单 CSV')),
+              PopupMenuItem(value: true, child: Text('导出积分流水 CSV')),
+            ],
+          ),
           IconButton(
             tooltip: '刷新',
             onPressed: _loading ? null : _loadData,
@@ -481,7 +552,7 @@ class FinancePageState extends State<FinancePage> {
           ),
           const SizedBox(height: 8),
           if (_records.isEmpty)
-            const _EmptyState(message: '暂无记账记录')
+            _EmptyState(message: '暂无记账记录', icon: Icons.receipt_long_outlined)
           else
             ..._buildRecordGroups(),
         ],
@@ -1027,6 +1098,7 @@ class FinancePageState extends State<FinancePage> {
             message: _pointMonthOffset == null
                 ? '暂无积分流水'
                 : '$_pointFilterLabel暂无积分流水',
+            icon: Icons.stars_outlined,
           )
         else
           ..._visiblePointRecords.map(_buildPointRecord),
@@ -1061,7 +1133,12 @@ class FinancePageState extends State<FinancePage> {
       ('获得积分', _monthPointIncome),
       ('支出积分', _monthPointExpense),
     ].where((entry) => entry.$2 > 0).toList();
-    if (values.isEmpty) return const _EmptyState(message: '本月暂无积分收支数据');
+    if (values.isEmpty) {
+      return const _EmptyState(
+        message: '本月暂无积分收支数据',
+        icon: Icons.pie_chart_outline,
+      );
+    }
     final total = values.fold<int>(0, (sum, value) => sum + value.$2);
     return Card(
       child: Padding(
@@ -1315,15 +1392,30 @@ class _ChartLegend extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.message});
+  const _EmptyState({required this.message, this.icon = Icons.inbox_outlined});
   final String message;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.onSurfaceVariant;
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Center(child: Text(message)),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 40, color: color.withValues(alpha: 0.55)),
+              const SizedBox(height: 10),
+              Text(
+                message,
+                style: theme.textTheme.bodyMedium?.copyWith(color: color),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

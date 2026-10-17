@@ -212,7 +212,9 @@ class TableSql {
     )
   ''';
 
-  // tasks任务表
+  // tasks长期任务表（任务类型 long）
+  // reward_points/penalty_points：完成奖励与逾期扣分；
+  // enable_penalty：逾期扣分开关；component_json：动态组件配置与数据。
   static const String createTasks = '''
     CREATE TABLE tasks (
       task_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +228,11 @@ class TableSql {
       difficulty INTEGER NOT NULL DEFAULT 1,
       parent_task_id INTEGER NULL,
       is_repeatable INTEGER NOT NULL DEFAULT 0,
+      reward_points INTEGER NOT NULL DEFAULT 0,
+      penalty_points INTEGER NOT NULL DEFAULT 0,
+      enable_penalty INTEGER NOT NULL DEFAULT 1,
+      component_json TEXT,
+      completed_at TEXT,
       sort INTEGER NOT NULL DEFAULT 0,
       create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       update_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
@@ -262,6 +269,8 @@ class TableSql {
       status_tag TEXT NOT NULL DEFAULT '未开始',
       reward_points INTEGER NOT NULL DEFAULT 0,
       penalty_points INTEGER NOT NULL DEFAULT 0,
+      enable_penalty INTEGER NOT NULL DEFAULT 1,
+      component_json TEXT,
       completed_at TEXT,
       is_deleted INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (task_tag_id) REFERENCES special_task_tags(id)
@@ -300,6 +309,8 @@ class TableSql {
       review_stage INTEGER NOT NULL DEFAULT 0,
       daily_points INTEGER NOT NULL DEFAULT 0,
       penalty_points INTEGER NOT NULL DEFAULT 0,
+      enable_penalty INTEGER NOT NULL DEFAULT 1,
+      component_json TEXT,
       is_deleted INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (task_tag_id) REFERENCES daily_task_tags(id)
     )
@@ -400,6 +411,8 @@ class TableSql {
   ''';
 
   // points积分流水（create_time 统一 ISO8601，与 Dart 端 toIso8601String 一致）
+  // biz_key：业务幂等键（如 penalty:daily:9:2026-10-17），同一业务动作
+  // 无论扫描多少次只产生一条流水；NULL 不参与唯一约束（历史流水/普通奖励）。
   static const String createPoints = '''
     CREATE TABLE points (
       points_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -407,9 +420,58 @@ class TableSql {
       source_id INTEGER NOT NULL,
       point_value INTEGER NOT NULL DEFAULT 0,
       operation_type TEXT NOT NULL,
+      biz_key TEXT,
       remark TEXT,
       create_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
     )
+  ''';
+
+  static const String createPointsBizKeyIndex = '''
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_points_biz_key
+    ON points(biz_key)
+    WHERE biz_key IS NOT NULL
+  ''';
+
+  // 任务动态组件-体重记录：一个任务多条，支持体重曲线图。
+  // task_kind：daily=日常/习惯，special=特殊短期，long=长期。
+  static const String createTaskWeightRecords = '''
+    CREATE TABLE task_weight_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_kind TEXT NOT NULL,
+      task_id INTEGER NOT NULL,
+      record_date TEXT NOT NULL,
+      weight REAL NOT NULL,
+      note TEXT,
+      create_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+    )
+  ''';
+
+  // 任务动态组件-心情记录：level 1-5，多条记录生成情绪趋势图。
+  static const String createTaskMoodRecords = '''
+    CREATE TABLE task_mood_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_kind TEXT NOT NULL,
+      task_id INTEGER NOT NULL,
+      record_date TEXT NOT NULL,
+      level INTEGER NOT NULL,
+      note TEXT,
+      create_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+    )
+  ''';
+
+  static const String createTaskRecordIndexes = '''
+    CREATE INDEX IF NOT EXISTS idx_task_weight_records_task_date
+      ON task_weight_records(task_kind, task_id, record_date)
+  ''';
+
+  static const String createTaskMoodRecordIndexes = '''
+    CREATE INDEX IF NOT EXISTS idx_task_mood_records_task_date
+      ON task_mood_records(task_kind, task_id, record_date)
+  ''';
+
+  static const String createTaskPenaltyIndex = '''
+    CREATE INDEX IF NOT EXISTS idx_tasks_penalty_scan
+      ON tasks(enable_penalty, status, deadline)
   ''';
 
   // tags全局标签
@@ -543,6 +605,12 @@ class TableSql {
     createCategorySettlements,
     createBudgetHistory,
     createPoints,
+    createPointsBizKeyIndex,
+    createTaskWeightRecords,
+    createTaskMoodRecords,
+    createTaskRecordIndexes,
+    createTaskMoodRecordIndexes,
+    createTaskPenaltyIndex,
     createTags,
     createAppSettings,
     createTimeCapsules,

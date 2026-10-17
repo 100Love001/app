@@ -272,6 +272,7 @@ class _FinanceCategoryManagementPageState
         ],
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: null,
         tooltip: '新增分类',
         onPressed: () => _editCategory(),
         child: const Icon(Icons.add),

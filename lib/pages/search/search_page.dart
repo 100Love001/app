@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/search/search_repository.dart';
 import 'package:app/utils/num_cast.dart';
+import 'package:app/widgets/common_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 
@@ -19,6 +20,7 @@ class _SearchPageState extends State<SearchPage> {
   Timer? _debounce;
   int _requestId = 0;
   SearchScope _scope = SearchScope.all;
+  TaskStatusFilter _taskFilter = TaskStatusFilter.all;
   List<Map<String, Object?>> _results = [];
   bool _loading = false;
   Object? _error;
@@ -32,6 +34,14 @@ class _SearchPageState extends State<SearchPage> {
     (SearchScope.finance, '财务'),
     (SearchScope.diaries, '日记'),
     (SearchScope.moods, '心情'),
+  ];
+
+  /// 「任务」范围下的状态筛选条。
+  static const _taskFilters = [
+    (TaskStatusFilter.all, '全部'),
+    (TaskStatusFilter.active, '进行中'),
+    (TaskStatusFilter.done, '已完成'),
+    (TaskStatusFilter.overdue, '逾期中'),
   ];
 
   @override
@@ -91,6 +101,9 @@ class _SearchPageState extends State<SearchPage> {
       final results = await SearchRepository.instance.search(
         keyword: keyword,
         scope: _scope,
+        taskStatusFilter: _scope == SearchScope.tasks
+            ? _taskFilter
+            : TaskStatusFilter.all,
       );
       if (!mounted || requestId != _requestId) return;
       setState(() {
@@ -156,15 +169,53 @@ class _SearchPageState extends State<SearchPage> {
             ],
           ),
         ),
+        if (_scope == SearchScope.tasks)
+          SizedBox(
+            height: 44,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final (filter, label) in _taskFilters)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Text(label),
+                      selected: _taskFilter == filter,
+                      onSelected: (_) {
+                        setState(() => _taskFilter = filter);
+                        _debounce?.cancel();
+                        ++_requestId;
+                        _search();
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
               : _error != null
-              ? Center(child: Text('搜索失败：$_error'))
+              ? EmptyState(
+                  icon: Icons.error_outline,
+                  title: '搜索失败',
+                  hint: '$_error',
+                  actionLabel: '重试',
+                  onAction: () => _search(),
+                )
               : _controller.text.trim().isEmpty
-              ? const Center(child: Text('输入关键词，搜索标签、任务、清单或记录'))
+              ? const EmptyState(
+                  icon: Icons.search,
+                  title: '输入关键词开始搜索',
+                  hint: '支持标签、任务、愿望、希望、财务与日记记录',
+                )
               : _results.isEmpty
-              ? const Center(child: Text('没有找到相关内容'))
+              ? const EmptyState(
+                  icon: Icons.search_off,
+                  title: '没有找到相关内容',
+                  hint: '换个关键词，或切换搜索范围试试',
+                )
               : ListView.builder(
                   itemCount: _results.length,
                   padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
@@ -184,22 +235,24 @@ class _SearchPageState extends State<SearchPage> {
                         row['date'] as String,
                       if (row['amount'] != null) '¥${row['amount']}',
                     ];
-                    return Card(
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          child: Icon(_iconFor(type), size: 20),
+                    return PressableCard(
+                      onTap: () => _showDetail(row),
+                      child: Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            child: Icon(_iconFor(type), size: 20),
+                          ),
+                          title: Text(row['title'] as String? ?? ''),
+                          subtitle: Text(
+                            [
+                              type,
+                              if (details.isNotEmpty) details.join(' · '),
+                              if (description.isNotEmpty) description,
+                            ].join(' · '),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        title: Text(row['title'] as String? ?? ''),
-                        subtitle: Text(
-                          [
-                            type,
-                            if (details.isNotEmpty) details.join(' · '),
-                            if (description.isNotEmpty) description,
-                          ].join(' · '),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () => _showDetail(row),
                       ),
                     );
                   },
@@ -291,6 +344,7 @@ class _SearchPageState extends State<SearchPage> {
     return switch (type) {
       '特殊任务' => _loadSpecialTask(id),
       '日常任务' => _loadDailyTask(id),
+      '长期任务' => _loadLongTask(id),
       '愿望' => _loadWish(id),
       '希望' => _loadHope(id),
       '财务' => _loadFinance(id),
@@ -322,6 +376,21 @@ class _SearchPageState extends State<SearchPage> {
       FROM daily_tasks
       LEFT JOIN daily_task_tags ON daily_tasks.task_tag_id = daily_task_tags.id
       WHERE daily_tasks.id = ?
+      ''',
+      [id],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  Future<Map<String, Object?>?> _loadLongTask(int id) async {
+    final rows = await AppDatabase.instance.rawQuery(
+      '''
+      SELECT COALESCE(tasks.note, '') AS content,
+        COALESCE(tasks.tag, '') AS tag,
+        tasks.status AS status,
+        tasks.deadline AS date
+      FROM tasks
+      WHERE tasks.task_id = ? AND tasks.task_type = 'long'
       ''',
       [id],
     );
@@ -413,7 +482,7 @@ class _SearchPageState extends State<SearchPage> {
     '愿望' => Icons.card_giftcard_outlined,
     '心情' || '心情标签' => Icons.mood_outlined,
     '日记' || '认知本' || '日记本' => Icons.menu_book_outlined,
-    '特殊任务' || '日常任务' => Icons.task_alt_outlined,
+    '特殊任务' || '日常任务' || '长期任务' => Icons.task_alt_outlined,
     _ => Icons.sell_outlined,
   };
 }

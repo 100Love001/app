@@ -5,6 +5,7 @@ import 'package:app/utils/budget_period.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
 import 'package:app/utils/time.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 class PointsService {
   const PointsService._();
@@ -23,6 +24,8 @@ class PointsService {
         THEN (SELECT name FROM special_tasks WHERE id = p.source_id)
       WHEN p.source_type IN ('daily_task', 'daily_task_penalty')
         THEN (SELECT name FROM daily_tasks WHERE id = p.source_id)
+      WHEN p.source_type IN ('long_task', 'long_task_penalty')
+        THEN (SELECT title FROM tasks WHERE task_id = p.source_id)
       WHEN p.source_type = 'hope' OR p.source_type = 'hope_step_penalty'
         THEN (SELECT name FROM hopes WHERE hope_id = p.source_id)
       WHEN p.source_type = 'hope_step'
@@ -66,6 +69,158 @@ class PointsService {
       date.month,
       date.day,
     ).add(Duration(days: AppConstants.reviewIntervals[intervalIndex]));
+  }
+
+  // ============ 任务逾期扣分（幂等）与补完成返还 ============
+
+  /// 任务大类 → 扣分流水 source_type（daily/habit 共用 daily_tasks 表）。
+  static String penaltySourceType(String kind) => switch (kind) {
+    'special' => 'special_task_penalty',
+    'long' => 'long_task_penalty',
+    _ => 'daily_task_penalty',
+  };
+
+  /// 幂等业务键：同一任务同一周期（yyyy-MM-dd）只扣一次。
+  /// 返还流水键为 'refund:' + 扣分键，同样唯一，保证重复扫描/重复补完成安全。
+  static String penaltyBizKey(String kind, int taskId, String periodKey) =>
+      'penalty:$kind:$taskId:$periodKey';
+
+  /// 幂等写入一笔任务逾期扣分；同一 bizKey 已存在时跳过，返回是否实际入账。
+  static Future<bool> applyTaskPenaltyOnce({
+    required String kind,
+    required int taskId,
+    required String periodKey,
+    required int points,
+    required String operationType,
+    required String remark,
+  }) async {
+    if (points <= 0) return false;
+    final db = await AppDatabase.instance.database;
+    return db.transaction((txn) async {
+      await txn.rawInsert(
+        '''
+        INSERT OR IGNORE INTO points
+          (source_type, source_id, point_value, operation_type, biz_key,
+           remark, create_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''',
+        [
+          penaltySourceType(kind),
+          taskId,
+          -points,
+          operationType,
+          penaltyBizKey(kind, taskId, periodKey),
+          remark,
+          DateTime.now().toIso8601String(),
+        ],
+      );
+      final result = await txn.rawQuery('SELECT changes() AS c');
+      return toInt(result.first['c']) == 1;
+    });
+  }
+
+  /// 补完成 / 补打卡后返还已扣积分：对该任务尚未返还的扣分流水
+  /// 逐笔写等额正流水（幂等）。[periodKey] 为 null 时返还全部未返还扣分。
+  /// 返回返还总积分。
+  static Future<int> refundTaskPenalties({
+    required String kind,
+    required int taskId,
+    String? periodKey,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    return db.transaction(
+      (txn) => _refundPenaltiesInTxn(
+        txn,
+        kind: kind,
+        taskId: taskId,
+        periodKey: periodKey,
+      ),
+    );
+  }
+
+  /// 事务内返还（供领奖/补完成与扣分写在同一事务，保证一致性）。
+  static Future<int> _refundPenaltiesInTxn(
+    DatabaseExecutor txn, {
+    required String kind,
+    required int taskId,
+    String? periodKey,
+  }) async {
+    final rows = await txn.rawQuery(
+      '''
+      SELECT p.biz_key, p.point_value
+      FROM points p
+      WHERE p.biz_key LIKE ?
+        AND p.point_value < 0
+        AND NOT EXISTS (
+          SELECT 1 FROM points r WHERE r.biz_key = 'refund:' || p.biz_key
+        )
+      ''',
+      ['penalty:$kind:$taskId:${periodKey ?? '%'}'],
+    );
+    var total = 0;
+    final nowIso = DateTime.now().toIso8601String();
+    for (final row in rows) {
+      final amount = -toInt(row['point_value']);
+      if (amount <= 0) continue;
+      await txn.rawInsert(
+        '''
+        INSERT OR IGNORE INTO points
+          (source_type, source_id, point_value, operation_type, biz_key,
+           remark, create_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''',
+        [
+          penaltySourceType(kind),
+          taskId,
+          amount,
+          '逾期扣分返还',
+          'refund:${row['biz_key']}',
+          '补完成返还逾期扣分 $amount 积分',
+          nowIso,
+        ],
+      );
+      total += amount;
+    }
+    return total;
+  }
+
+  /// 完成长期任务：发放奖励积分，并返还周期内已扣的逾期积分（补完成）。
+  static Future<int?> completeLongTermTask(int taskId) async {
+    final db = await AppDatabase.instance.database;
+    return db.transaction((transaction) async {
+      final rows = await transaction.query(
+        'tasks',
+        columns: ['title', 'reward_points', 'status'],
+        where: "task_id = ? AND task_type = 'long'",
+        whereArgs: [taskId],
+        limit: 1,
+      );
+      if (rows.isEmpty || rows.first['status'] == '已完成') return null;
+      final reward = toInt(rows.first['reward_points']);
+      await transaction.update(
+        'tasks',
+        {'status': '已完成', 'completed_at': DateTime.now().toIso8601String()},
+        where: 'task_id = ?',
+        whereArgs: [taskId],
+      );
+      if (reward > 0) {
+        await transaction.insert('points', {
+          'source_type': 'long_task',
+          'source_id': taskId,
+          'point_value': reward,
+          'operation_type': '任务奖励',
+          'remark': '完成长期任务：${rows.first['title']}（奖励 $reward 积分）',
+          'create_time': DateTime.now().toIso8601String(),
+        });
+      }
+      // 补完成返还此前已扣的逾期积分（幂等）。
+      await _refundPenaltiesInTxn(
+        transaction,
+        kind: 'long',
+        taskId: taskId,
+      );
+      return reward;
+    });
   }
 
   static Future<int?> completeSpecialTask(int taskId) async {
@@ -122,6 +277,8 @@ class PointsService {
   }
 
   /// 逾期补完成特殊任务：仅允许在 end_time 之后操作，只归档状态、不发积分。
+  /// 逾期扣分由 TaskPenaltyService 幂等扫描入账；补完成时自动返还
+  /// 已扣的逾期积分（幂等）。
   /// 返回 false 表示任务不存在、已删除、已完成或仍在有效时间窗内
   /// （在时间窗内应走 completeSpecialTask 正常计分）。
   static Future<bool> closeExpiredSpecialTask(int taskId) async {
@@ -129,7 +286,7 @@ class PointsService {
     return db.transaction((transaction) async {
       final rows = await transaction.query(
         'special_tasks',
-        columns: ['name', 'status_tag', 'end_time', 'is_deleted', 'penalty_points'],
+        columns: ['name', 'status_tag', 'end_time', 'is_deleted'],
         where: 'id = ?',
         whereArgs: [taskId],
         limit: 1,
@@ -148,17 +305,12 @@ class PointsService {
         whereArgs: [taskId, storedStatus],
       );
       if (changed == 1) {
-        final penalty = toInt(rows.first['penalty_points']);
-        if (penalty > 0) {
-          await transaction.insert('points', {
-            'source_type': 'special_task_penalty',
-            'source_id': taskId,
-            'point_value': -penalty,
-            'operation_type': '特殊任务未完成扣除',
-            'remark': '特殊任务未完成：${rows.first['name']}（扣除 $penalty 积分）',
-            'create_time': DateTime.now().toIso8601String(),
-          });
-        }
+        // 补完成返还：把该任务未返还的逾期扣分等额退回（幂等）。
+        await _refundPenaltiesInTxn(
+          transaction,
+          kind: 'special',
+          taskId: taskId,
+        );
       }
       return changed == 1;
     });
@@ -244,7 +396,13 @@ class PointsService {
           'create_time': DateTime.now().toIso8601String(),
         });
       }
-      return reward;
+      // 补领本周期奖励时，返还周期内已扣的逾期分（幂等）。
+      final refunded = await _refundPenaltiesInTxn(
+        transaction,
+        kind: 'daily',
+        taskId: taskId,
+      );
+      return reward + refunded;
     });
   }
 
@@ -315,7 +473,14 @@ class PointsService {
           'create_time': DateTime.now().toIso8601String(),
         });
       }
-      return reward;
+      // 当天曾因该打卡日扣分（极端情况：跨点扫描后补打卡）则等额返还。
+      final refunded = await _refundPenaltiesInTxn(
+        transaction,
+        kind: 'habit',
+        taskId: taskId,
+        periodKey: claimDate,
+      );
+      return reward + refunded;
     });
   }
 
@@ -891,76 +1056,6 @@ class PointsService {
           'remark': remark,
           'create_time': DateTime.now().toIso8601String(),
         });
-      }
-    });
-  }
-
-  /// 结算日常任务未完成扣除：检查所有进行中的日常任务，如果下次复习时间已过
-  /// （超过1天未领取奖励），则扣除相应的惩罚积分。每个任务每天只扣除一次。
-  static Future<void> settleDailyTaskPenalties() async {
-    final db = await AppDatabase.instance.database;
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final tasks = await db.query(
-      'daily_tasks',
-      columns: [
-        'id',
-        'name',
-        'daily_points',
-        'penalty_points',
-        'next_review_time',
-        'task_mode',
-      ],
-      where: "status_tag = '进行中' AND is_deleted = 0",
-    );
-
-    await db.transaction((txn) async {
-      for (final task in tasks) {
-        final penalty = toInt(task['penalty_points']);
-        if (penalty <= 0) continue;
-        // B1：自定义习惯型任务按打卡日领奖、不适用艾宾浩斯逾期扣分。
-        if (task['task_mode'] == 'habit') continue;
-
-        final nextReview = DateTime.tryParse('${task['next_review_time']}');
-        if (nextReview == null) continue;
-
-        final reviewDay = DateTime(
-          nextReview.year,
-          nextReview.month,
-          nextReview.day,
-        );
-        final daysOverdue = today.difference(reviewDay).inDays;
-
-        if (daysOverdue > 1) {
-          final taskId = toInt(task['id']);
-          final penaltyDate = TimeUtil.toDateKey(today);
-
-          final existing = await txn.query(
-            'points',
-            columns: ['points_id'],
-            where:
-                'source_type = ? AND source_id = ? AND operation_type = ? '
-                'AND DATE(create_time) = ?',
-            whereArgs: [
-              'daily_task_penalty',
-              taskId,
-              '日常任务未完成扣除',
-              penaltyDate,
-            ],
-            limit: 1,
-          );
-
-          if (existing.isEmpty) {
-            await txn.insert('points', {
-              'source_type': 'daily_task_penalty',
-              'source_id': taskId,
-              'point_value': -penalty,
-              'operation_type': '日常任务未完成扣除',
-              'remark': '日常任务逾期：${task['name']}（逾期 $daysOverdue 天扣除 $penalty 积分）',
-              'create_time': now.toIso8601String(),
-            });
-          }
-        }
       }
     });
   }

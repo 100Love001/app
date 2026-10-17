@@ -333,6 +333,7 @@ class _DiaryFolderManagementPageState extends State<DiaryFolderManagementPage> {
       floatingActionButton: _folders.isEmpty
           ? null
           : FloatingActionButton(
+              heroTag: null,
               tooltip: '新建顶层文件夹',
               onPressed: () => _editFolder(),
               child: const Icon(Icons.create_new_folder_outlined),

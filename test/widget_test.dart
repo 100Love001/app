@@ -1,6 +1,7 @@
 import 'package:app/main.dart';
 import 'package:app/pages/anniversaries/anniversaries_page.dart';
 import 'package:app/pages/finance/finance_category_management_page.dart';
+import 'package:app/pages/main_page.dart';
 import 'package:app/pages/profile/appearance_settings_page.dart';
 import 'package:app/pages/profile/billing_system_page.dart';
 import 'package:app/pages/profile/budget_management_page.dart';
@@ -39,6 +40,29 @@ Future<void> tapProfileTile(WidgetTester tester, String title) async {
 }
 
 void main() {
+  testWidgets('main page can be opened without duplicate hero tags', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute<void>(builder: (_) => const MainPage())),
+              child: const Text('打开应用'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开应用'));
+    await pumpFrames(tester);
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('opens the home tab and switches tabs', (tester) async {
     await tester.pumpWidget(const MyApp());
     await tester.pump();

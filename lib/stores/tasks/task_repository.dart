@@ -243,4 +243,54 @@ class TaskRepository {
         WHERE task_id = ? AND reward_date >= ? AND reward_date < ?
         ORDER BY reward_date
       ''', [taskId, startDate, endDate]);
+
+  // ====================== 长期任务（tasks 表，task_type='long'）======================
+
+  Future<List<Map<String, dynamic>>> loadLongTermTasks() =>
+      AppDatabase.instance.rawQuery('''
+        SELECT * FROM tasks
+        WHERE task_type = 'long' AND parent_task_id IS NULL
+        ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline, sort, task_id
+      ''');
+
+  /// 新建或更新长期任务，返回 task_id。
+  Future<int> saveLongTermTask(
+    Map<String, dynamic> values, {
+    int? id,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    if (id == null) {
+      return db.insert('tasks', {
+        ...values,
+        'task_type': 'long',
+        'status': values['status'] ?? '未开始',
+      });
+    }
+    await db.update(
+      'tasks',
+      values,
+      where: 'task_id = ? AND task_type = ?',
+      whereArgs: [id, 'long'],
+    );
+    return id;
+  }
+
+  /// 长期任务物理删除（子任务由 ON DELETE CASCADE 级联），
+  /// 组件历史记录同事务清理。
+  Future<void> deleteLongTermTask(int id) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'task_weight_records',
+        where: "task_kind = 'long' AND task_id = ?",
+        whereArgs: [id],
+      );
+      await txn.delete(
+        'task_mood_records',
+        where: "task_kind = 'long' AND task_id = ?",
+        whereArgs: [id],
+      );
+      await txn.delete('tasks', where: 'task_id = ?', whereArgs: [id]);
+    });
+  }
 }

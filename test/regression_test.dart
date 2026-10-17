@@ -1,7 +1,9 @@
+import 'package:app/constants/app_constants.dart';
 import 'package:app/constants/style/app_style.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
 import 'package:app/utils/date_range.dart';
+import 'package:app/utils/task_component.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -238,6 +240,161 @@ void main() {
     test('food points per yuan is positive', () {
       expect(PointsService.foodPointsPerYuan, greaterThan(0));
       expect(PointsService.foodPointsPerYuan, 5);
+    });
+  });
+
+  group('task penalty idempotency keys', () {
+    test('biz key embeds kind, task id and period key', () {
+      expect(
+        PointsService.penaltyBizKey('habit', 42, '2025-07-01'),
+        'penalty:habit:42:2025-07-01',
+      );
+      expect(
+        PointsService.penaltyBizKey('special', 7, '2025-06-30'),
+        'penalty:special:7:2025-06-30',
+      );
+    });
+
+    test('same task and period always produce the same key', () {
+      String key() => PointsService.penaltyBizKey('daily', 9, '2025-07-01');
+      expect(key(), key());
+    });
+
+    test('different periods or tasks produce different keys', () {
+      final keys = {
+        PointsService.penaltyBizKey('daily', 9, '2025-07-01'),
+        PointsService.penaltyBizKey('daily', 9, '2025-07-02'),
+        PointsService.penaltyBizKey('daily', 10, '2025-07-01'),
+        PointsService.penaltyBizKey('long', 9, '2025-07-01'),
+      };
+      expect(keys.length, 4);
+    });
+
+    test('source types cover the four penalizable task kinds', () {
+      expect(PointsService.penaltySourceType('special'),
+          'special_task_penalty');
+      expect(PointsService.penaltySourceType('long'), 'long_task_penalty');
+      expect(PointsService.penaltySourceType('daily'), 'daily_task_penalty');
+      expect(PointsService.penaltySourceType('habit'), 'daily_task_penalty');
+    });
+
+    test('wish and hope never support overdue penalty', () {
+      expect(TaskType.wish.supportsOverduePenalty, isFalse);
+      expect(TaskType.hope.supportsOverduePenalty, isFalse);
+      for (final type in [
+        TaskType.daily,
+        TaskType.longTerm,
+        TaskType.shortTerm,
+        TaskType.habit,
+      ]) {
+        expect(type.supportsOverduePenalty, isTrue);
+      }
+    });
+  });
+
+  group('TaskComponentDocument', () {
+    test('encodes and decodes ordered components with data', () {
+      final doc = TaskComponentDocument([
+        const TaskComponent(
+          type: ComponentType.deadline,
+          data: {ComponentDataKeys.end: '2025-08-01T23:59:00.000'},
+        ),
+        const TaskComponent(
+          type: ComponentType.rewardPoints,
+          data: {ComponentDataKeys.points: 20},
+        ),
+      ]);
+      final restored = TaskComponentDocument.decode(doc.encode());
+      expect(restored.components.length, 2);
+      expect(restored.components[0].type, ComponentType.deadline);
+      expect(restored.components[1].type, ComponentType.rewardPoints);
+      expect(
+        restored.dataOf(ComponentType.rewardPoints)[ComponentDataKeys.points],
+        20,
+      );
+    });
+
+    test('corrupted or partial json degrades to an empty document', () {
+      expect(TaskComponentDocument.decode(null).components, isEmpty);
+      expect(TaskComponentDocument.decode('').components, isEmpty);
+      expect(TaskComponentDocument.decode('not-json').components, isEmpty);
+      expect(
+        TaskComponentDocument.decode(
+          '[{"type":"unknown_type","data":{}},{"type":"tag","data":{}}]',
+        ).components.single.type,
+        ComponentType.tag,
+      );
+    });
+
+    test('upsert, update, remove and reorder mutate in place', () {
+      final doc = TaskComponentDocument.defaultFor(TaskType.daily);
+      doc.upsert(ComponentType.weight);
+      expect(doc.has(ComponentType.weight), isTrue);
+      doc.updateData(ComponentType.weight, {ComponentDataKeys.value: 70});
+      expect(doc.dataOf(ComponentType.weight)[ComponentDataKeys.value], 70);
+      final originalOrder = doc.components.map((c) => c.type).toList();
+      doc.reorder(originalOrder.length - 1, 0);
+      expect(doc.components.first.type, ComponentType.weight);
+      expect(doc.components[1].type, originalOrder.first);
+      expect(doc.components.length, originalOrder.length);
+      doc.remove(ComponentType.weight);
+      expect(doc.has(ComponentType.weight), isFalse);
+    });
+
+    test('each task type gets its default component set', () {
+      expect(
+        TaskComponentDocument.defaultFor(
+          TaskType.shortTerm,
+        ).components.map((c) => c.type),
+        contains(ComponentType.reminders),
+      );
+      expect(
+        TaskComponentDocument.defaultFor(
+          TaskType.habit,
+        ).components.map((c) => c.type),
+        contains(ComponentType.repeatRule),
+      );
+      expect(
+        TaskComponentDocument.defaultFor(
+          TaskType.longTerm,
+        ).components.map((c) => c.type),
+        contains(ComponentType.deadline),
+      );
+    });
+
+    test('file and subtask helpers return growable lists', () {
+      final files = TaskComponentDocument.fileItems(const {});
+      expect(() => files.add({'name': 'a', 'path': 'b'}), returnsNormally);
+      final items = TaskComponentDocument.subtaskItems(const {});
+      expect(
+        () => items.add({'text': 'a', 'done': false}),
+        returnsNormally,
+      );
+    });
+
+    test('intValue tolerates int, num and string representations', () {
+      expect(
+        TaskComponentDocument.intValue(const {'v': 3}, 'v', 1),
+        3,
+      );
+      expect(
+        TaskComponentDocument.intValue(const {'v': '12'}, 'v', 1),
+        12,
+      );
+      expect(
+        TaskComponentDocument.intValue(const {'v': 4.0}, 'v', 1),
+        4,
+      );
+      expect(TaskComponentDocument.intValue(const {}, 'v', 7), 7);
+    });
+  });
+
+  group('MoodLevel', () {
+    test('maps valid scores and clamps invalid ones to neutral', () {
+      expect(MoodLevel.fromScore(1), MoodLevel.veryLow);
+      expect(MoodLevel.fromScore(5), MoodLevel.veryGood);
+      expect(MoodLevel.fromScore(null), MoodLevel.neutral);
+      expect(MoodLevel.fromScore(99), MoodLevel.neutral);
     });
   });
 }
