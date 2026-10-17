@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:app/stores/notifications/local_notification_service.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
-import 'package:app/utils/dialog.dart';
 import 'package:flutter/material.dart';
 
 /// 个性化参数：把原来的固定值（兑换比例、提醒时间等）开放为可配置，
@@ -49,57 +48,6 @@ class _PreferenceSettingsPageState extends State<PreferenceSettingsPage> {
     if (minutes % 1440 == 0) return '提前 ${minutes ~/ 1440} 天';
     if (minutes % 60 == 0) return '提前 ${minutes ~/ 60} 小时';
     return '提前 $minutes 分钟';
-  }
-
-  Future<void> _editFoodPointsPerYuan() async {
-    final controller = TextEditingController(
-      text: '${_settings.foodPointsPerYuan}',
-    );
-    final formKey = GlobalKey<FormState>();
-    final value = await showDialog<int>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('积分兑换比例'),
-        content: Form(
-          key: formKey,
-          child: TextFormField(
-            controller: controller,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: '每元结余兑换积分',
-              suffixText: '分 / 元',
-              helperText: '范围 1-100，未结算的饭钱结余按新比例入账',
-            ),
-            validator: (text) {
-              final parsed = int.tryParse(text?.trim() ?? '');
-              if (parsed == null || parsed < 1 || parsed > 100) {
-                return '请输入 1-100 的整数';
-              }
-              return null;
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (formKey.currentState?.validate() != true) return;
-              Navigator.pop(dialogContext, int.parse(controller.text.trim()));
-            },
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    await waitForDialogDismissal();
-    controller.dispose();
-    if (value == null) return;
-    await _save(() => _settings.setFoodPointsPerYuan(value));
   }
 
   Future<void> _pickHour({
@@ -203,23 +151,6 @@ class _PreferenceSettingsPageState extends State<PreferenceSettingsPage> {
               ),
               child: Column(
                 children: [
-                  ListTile(
-                    leading: _tileIcon(
-                      Icons.currency_exchange_rounded,
-                      colorScheme.primary,
-                    ),
-                    title: const Text('积分兑换比例'),
-                    subtitle: Text(
-                      '饭钱每元结余 = ${_settings.foodPointsPerYuan} 积分',
-                    ),
-                    trailing: Icon(
-                      Icons.chevron_right_rounded,
-                      color: colorScheme.onSurfaceVariant,
-                      size: 22,
-                    ),
-                    onTap: _editFoodPointsPerYuan,
-                  ),
-                  const Divider(height: 1, indent: 68),
                   ListTile(
                     leading: _tileIcon(
                       Icons.summarize_outlined,

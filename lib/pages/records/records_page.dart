@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:app/constants/app_constants.dart';
 import 'package:app/pages/records/diary_editor_page.dart';
 import 'package:app/pages/records/diary_folder_management_page.dart';
+import 'package:app/routes/app_routes.dart';
 import 'package:app/stores/collections/collection_repository.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
@@ -14,12 +15,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 
 /// C2：cognition=认知本（原日记本），diary=新独立日记本。
-enum _RecordTab { wishes, hopes, problems, cognition, diary }
+enum _RecordTab { wishes, hopes, problems, cognition, diary, anniversaries }
 
 class RecordsPage extends StatefulWidget {
-  const RecordsPage({super.key, this.openDiaries = false});
+  const RecordsPage({
+    super.key,
+    this.openDiaries = false,
+    this.taskListsOnly = false,
+    this.openHopes = false,
+  });
 
   final bool openDiaries;
+  final bool taskListsOnly;
+  final bool openHopes;
 
   @override
   RecordsPageState createState() => RecordsPageState();
@@ -49,9 +57,8 @@ class RecordsPageState extends State<RecordsPage> {
   static String _bookName(String bookType) =>
       bookType == 'diary' ? '日记本' : '认知本';
 
-  List<Map<String, dynamic>> _foldersOfBook(String bookType) => _folders
-      .where((folder) => folder['book_type'] == bookType)
-      .toList();
+  List<Map<String, dynamic>> _foldersOfBook(String bookType) =>
+      _folders.where((folder) => folder['book_type'] == bookType).toList();
 
   List<Map<String, dynamic>> _diariesOfBook(String bookType) =>
       bookType == 'diary' ? _diaryBookDiaries : _cognitionDiaries;
@@ -121,7 +128,13 @@ class RecordsPageState extends State<RecordsPage> {
   @override
   void initState() {
     super.initState();
-    if (widget.openDiaries) _tab = _RecordTab.cognition;
+    if (widget.taskListsOnly) {
+      _tab = widget.openHopes ? _RecordTab.hopes : _RecordTab.wishes;
+    } else if (widget.openDiaries) {
+      _tab = _RecordTab.cognition;
+    } else {
+      _tab = _RecordTab.problems;
+    }
     _loadData();
   }
 
@@ -207,9 +220,8 @@ class RecordsPageState extends State<RecordsPage> {
         for (final bookType in const ['cognition', 'diary']) {
           final selected = _selectedFolderOf(bookType);
           if (selected != null &&
-              !_foldersOfBook(
-                bookType,
-              ).any((folder) => folder['folder_id'] == selected)) {
+              !_foldersOfBook(bookType)
+                  .any((folder) => folder['folder_id'] == selected)) {
             _setSelectedFolder(bookType, null);
           }
         }
@@ -294,9 +306,8 @@ class RecordsPageState extends State<RecordsPage> {
       );
       if (progress == null) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('该希望尚未开始或已经兑换')),
-          );
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('该希望尚未开始或已经兑换')));
         }
         return;
       }
@@ -332,9 +343,8 @@ class RecordsPageState extends State<RecordsPage> {
         final message = result.stepReward != null
             ? '步骤“${step['name']}”已完成（+${result.stepReward} 积分），希望进度 ${result.progress}%'
             : '步骤“${step['name']}”已完成，希望进度 ${result.progress}%';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
       }
     } catch (error) {
       if (mounted) {
@@ -638,6 +648,7 @@ class RecordsPageState extends State<RecordsPage> {
         c.dispose();
       }
     }
+
     if (!mounted) {
       disposeStepControllers();
       return;
@@ -898,10 +909,7 @@ class RecordsPageState extends State<RecordsPage> {
         'requirement': dialogRequirement,
         'tag_id': selectedTagId,
         if (wish) 'required_points': dialogValue,
-        if (!wish) ...{
-          'reward_points': dialogValue,
-          'hope_mode': hopeMode,
-        },
+        if (!wish) ...{'reward_points': dialogValue, 'hope_mode': hopeMode},
       };
       // D1：分步模式下，收集命名的步骤（名称+奖励）。
       final stepInputs = <({String name, int reward})>[];
@@ -909,10 +917,8 @@ class RecordsPageState extends State<RecordsPage> {
         for (var i = 0; i < stepControllers.length; i++) {
           final name = stepControllers[i].text.trim();
           if (name.isEmpty) continue;
-          final reward = int.tryParse(
-                stepRewardControllers[i].text.trim(),
-              ) ??
-              0;
+          final reward =
+              int.tryParse(stepRewardControllers[i].text.trim()) ?? 0;
           stepInputs.add((name: name, reward: reward));
         }
       }
@@ -1060,9 +1066,8 @@ class RecordsPageState extends State<RecordsPage> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.secondaryContainer.withValues(alpha: 0.4),
+                  color: Theme.of(context).colorScheme.secondaryContainer
+                      .withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text('要求：${(item['requirement'] as String).trim()}'),
@@ -1079,7 +1084,9 @@ class RecordsPageState extends State<RecordsPage> {
               ),
             ] else ...[
               Text(
-                isStepsHope ? '希望进度（按完成步骤）：${hopeProgress.toStringAsFixed(0)}%' : '希望进度：${hopeProgress.toStringAsFixed(0)}%',
+                isStepsHope
+                    ? '希望进度（按完成步骤）：${hopeProgress.toStringAsFixed(0)}%'
+                    : '希望进度：${hopeProgress.toStringAsFixed(0)}%',
               ),
               Text('完成奖励：${item['reward_points']} 积分'),
               LinearProgressIndicator(
@@ -1161,21 +1168,15 @@ class RecordsPageState extends State<RecordsPage> {
                         onPressed: () async {
                           Navigator.pop(context);
                           final settings = AppSettingsController.instance;
-                          await settings.setWishGoalId(
-                            isGoal ? null : id,
-                          );
+                          await settings.setWishGoalId(isGoal ? null : id);
                           if (!mounted) return;
                           ScaffoldMessenger.of(this.context).showSnackBar(
                             SnackBar(
-                              content: Text(
-                                isGoal ? '已取消目标' : '已设为首页目标',
-                              ),
+                              content: Text(isGoal ? '已取消目标' : '已设为首页目标'),
                             ),
                           );
                         },
-                        icon: Icon(
-                          isGoal ? Icons.flag : Icons.flag_outlined,
-                        ),
+                        icon: Icon(isGoal ? Icons.flag : Icons.flag_outlined),
                         label: Text(isGoal ? '取消目标' : '设为目标'),
                       );
                     },
@@ -1198,7 +1199,8 @@ class RecordsPageState extends State<RecordsPage> {
                     label: const Text('增加渴望度'),
                   ),
                 FilledButton(
-                  onPressed: item['status'] == '已兑换' ||
+                  onPressed:
+                      item['status'] == '已兑换' ||
                           (!wish &&
                               isStepsHope &&
                               item['status'] == '进行中' &&
@@ -1250,54 +1252,69 @@ class RecordsPageState extends State<RecordsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('记录'),
-        actions: [
-          if (_tab == _RecordTab.cognition || _tab == _RecordTab.diary)
-            IconButton(
-              tooltip: '在此处新建文件夹',
-              onPressed: _loading
-                  ? null
-                  : () => _createDiaryFolder(
+      appBar: widget.taskListsOnly
+          ? null
+          : AppBar(
+              title: const Text('记录'),
+              actions: [
+                if (!widget.taskListsOnly &&
+                    (_tab == _RecordTab.cognition || _tab == _RecordTab.diary))
+                  IconButton(
+                    tooltip: '在此处新建文件夹',
+                    onPressed: _loading
+                        ? null
+                        : () => _createDiaryFolder(
+                            _tab == _RecordTab.diary ? 'diary' : 'cognition',
+                          ),
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                  ),
+                if (!widget.taskListsOnly &&
+                    (_tab == _RecordTab.cognition || _tab == _RecordTab.diary))
+                  IconButton(
+                    tooltip: '管理文件夹',
+                    onPressed: () => _manageDiaryFolders(
                       _tab == _RecordTab.diary ? 'diary' : 'cognition',
                     ),
-              icon: const Icon(Icons.create_new_folder_outlined),
+                    icon: const Icon(Icons.folder_open_outlined),
+                  ),
+                if (_tab == _RecordTab.wishes || _tab == _RecordTab.hopes)
+                  IconButton(
+                    tooltip: _tab == _RecordTab.wishes ? '新增愿望' : '新增希望',
+                    onPressed: _loading
+                        ? null
+                        : () => _addItem(wish: _tab == _RecordTab.wishes),
+                    icon: const Icon(Icons.add),
+                  ),
+                if (!widget.taskListsOnly && _tab == _RecordTab.problems)
+                  IconButton(
+                    tooltip: '新增问题',
+                    onPressed: _loading ? null : () => _addProblem(),
+                    icon: const Icon(Icons.add),
+                  ),
+                if (_tab != _RecordTab.anniversaries)
+                  IconButton(
+                    onPressed: _loading ? null : _loadData,
+                    icon: const Icon(Icons.refresh),
+                  ),
+              ],
             ),
-          if (_tab == _RecordTab.cognition || _tab == _RecordTab.diary)
-            IconButton(
-              tooltip: '管理文件夹',
-              onPressed: () => _manageDiaryFolders(
-                _tab == _RecordTab.diary ? 'diary' : 'cognition',
-              ),
-              icon: const Icon(Icons.folder_open_outlined),
-            ),
-          if (_tab == _RecordTab.wishes || _tab == _RecordTab.hopes)
-            IconButton(
-              tooltip: _tab == _RecordTab.wishes ? '新增愿望' : '新增希望',
+      floatingActionButton: widget.taskListsOnly
+          ? FloatingActionButton.extended(
               onPressed: _loading
                   ? null
                   : () => _addItem(wish: _tab == _RecordTab.wishes),
+              tooltip: _tab == _RecordTab.wishes ? '新增愿望' : '新增希望',
               icon: const Icon(Icons.add),
-            ),
-          if (_tab == _RecordTab.problems)
-            IconButton(
-              tooltip: '新增问题',
-              onPressed: _loading ? null : () => _addProblem(),
-              icon: const Icon(Icons.add),
-            ),
-          IconButton(
-            onPressed: _loading ? null : _loadData,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      floatingActionButton: _tab == _RecordTab.cognition ||
-              _tab == _RecordTab.diary
+              label: Text(_tab == _RecordTab.wishes ? '新增愿望' : '新增希望'),
+            )
+          : _tab == _RecordTab.cognition || _tab == _RecordTab.diary
           ? FloatingActionButton.extended(
               onPressed: _loading
                   ? null
                   : () => _editDiary(
-                      bookType: _tab == _RecordTab.diary ? 'diary' : 'cognition',
+                      bookType: _tab == _RecordTab.diary
+                          ? 'diary'
+                          : 'cognition',
                     ),
               icon: const Icon(Icons.edit_note),
               label: Text(_tab == _RecordTab.diary ? '写日记' : '记录认知'),
@@ -1332,36 +1349,50 @@ class RecordsPageState extends State<RecordsPage> {
 
   Widget _buildTopTabs() => SizedBox(
     height: 54,
-    child: ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      scrollDirection: Axis.horizontal,
-      children: [
-        for (final entry in [
-          (_RecordTab.wishes, '愿望清单'),
-          (_RecordTab.hopes, '希望清单'),
-          (_RecordTab.problems, '问题清单'),
-          (_RecordTab.cognition, '认知本'),
-          (_RecordTab.diary, '日记本'),
-        ])
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: ChoiceChip(
-              label: Text(entry.$2),
-              selected: _tab == entry.$1,
-              onSelected: (_) {
-                setState(() {
-                  _tab = entry.$1;
-                  _carouselIndex = 0;
-                });
-                if (_carouselController.hasClients) {
-                  _carouselController.jumpToPage(0);
-                }
-                _configureCarouselTimer();
-              },
-            ),
+    child: widget.taskListsOnly
+        ? const SizedBox.shrink()
+        : ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            scrollDirection: Axis.horizontal,
+            children: [
+              for (final entry in [
+                (_RecordTab.problems, '问题清单'),
+                (_RecordTab.cognition, '认知本'),
+                (_RecordTab.diary, '日记本'),
+                (_RecordTab.anniversaries, '纪念日'),
+              ])
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: ChoiceChip(
+                    label: Text(entry.$2),
+                    selected: _tab == entry.$1,
+                    onSelected: (_) {
+                      setState(() {
+                        _tab = entry.$1;
+                        _carouselIndex = 0;
+                      });
+                      if (entry.$1 == _RecordTab.anniversaries) {
+                        unawaited(
+                          Navigator.pushNamed<void>(
+                            context,
+                            AppRoutes.anniversaries,
+                          ).then((_) {
+                            if (mounted) {
+                              setState(() => _tab = _RecordTab.problems);
+                            }
+                          }),
+                        );
+                        return;
+                      }
+                      if (_carouselController.hasClients) {
+                        _carouselController.jumpToPage(0);
+                      }
+                      _configureCarouselTimer();
+                    },
+                  ),
+                ),
+            ],
           ),
-      ],
-    ),
   );
 
   Widget _buildBody() {
@@ -1449,9 +1480,7 @@ class RecordsPageState extends State<RecordsPage> {
   }
 
   Widget _buildProblems() {
-    final pending = _problems
-        .where((item) => item['status'] != '已解决')
-        .toList();
+    final pending = _problems.where((item) => item['status'] != '已解决').toList();
     final resolved = _problems
         .where((item) => item['status'] == '已解决')
         .toList();
@@ -1468,9 +1497,8 @@ class RecordsPageState extends State<RecordsPage> {
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text(
                 '待解决（${pending.length}）',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
             for (final problem in pending) _buildProblemCard(problem),
@@ -1480,9 +1508,8 @@ class RecordsPageState extends State<RecordsPage> {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
                   '已解决（${resolved.length}）',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: Theme.of(context).textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
               for (final problem in resolved) _buildProblemCard(problem),
@@ -1535,21 +1562,17 @@ class RecordsPageState extends State<RecordsPage> {
               resolved
                   ? '解决于 ${_problemTimeLabel(problem['resolved_at'] as String?)}'
                   : '记录于 ${_problemTimeLabel(problem['create_time'] as String?)}',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: colorScheme.onSurfaceVariant),
             ),
           ],
         ),
         trailing: IconButton(
           tooltip: resolved ? '重新打开' : '标记解决',
-          onPressed: () => resolved
-              ? _reopenProblem(problem)
-              : _resolveProblem(problem),
+          onPressed: () =>
+              resolved ? _reopenProblem(problem) : _resolveProblem(problem),
           icon: Icon(
-            resolved
-                ? Icons.undo
-                : Icons.check_circle_outline,
+            resolved ? Icons.undo : Icons.check_circle_outline,
             color: resolved ? colorScheme.tertiary : accent,
           ),
         ),
@@ -1607,27 +1630,21 @@ class RecordsPageState extends State<RecordsPage> {
               if (titleController.text.trim().isEmpty) {
                 ScaffoldMessenger.of(dialogContext)
                   ..clearSnackBars()
-                  ..showSnackBar(
-                    const SnackBar(content: Text('请输入问题标题')),
-                  );
+                  ..showSnackBar(const SnackBar(content: Text('请输入问题标题')));
                 return;
               }
               try {
-                await CollectionRepository.instance.saveProblem(
-                  {
-                    'title': titleController.text.trim(),
-                    'description': descController.text.trim(),
-                  },
-                  id: problem?['problem_id'] as int?,
-                );
+                await CollectionRepository.instance.saveProblem({
+                  'title': titleController.text.trim(),
+                  'description': descController.text.trim(),
+                }, id: problem?['problem_id'] as int?);
                 if (dialogContext.mounted) {
                   Navigator.pop(dialogContext, true);
                 }
               } catch (error) {
                 if (dialogContext.mounted) {
-                  ScaffoldMessenger.of(dialogContext).showSnackBar(
-                    SnackBar(content: Text('保存问题失败：$error')),
-                  );
+                  ScaffoldMessenger.of(dialogContext)
+                      .showSnackBar(SnackBar(content: Text('保存问题失败：$error')));
                 }
               }
             },
@@ -1693,9 +1710,8 @@ class RecordsPageState extends State<RecordsPage> {
       await _loadData();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('操作失败：$error')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('操作失败：$error')));
       }
     }
   }
@@ -1710,9 +1726,8 @@ class RecordsPageState extends State<RecordsPage> {
       await _loadData();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('操作失败：$error')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('操作失败：$error')));
       }
     }
   }
@@ -1747,9 +1762,8 @@ class RecordsPageState extends State<RecordsPage> {
       await _loadData();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败：$error')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('删除失败：$error')));
       }
     }
   }
@@ -1787,15 +1801,15 @@ class RecordsPageState extends State<RecordsPage> {
                     ? '暂无详细描述'
                     : (problem['description'] as String).trim(),
               ),
-              if ((problem['solution_note'] as String? ?? '').trim().isNotEmpty) ...[
+              if ((problem['solution_note'] as String? ?? '')
+                  .trim()
+                  .isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Theme.of(sheetContext)
-                        .colorScheme
-                        .secondaryContainer
+                    color: Theme.of(sheetContext).colorScheme.secondaryContainer
                         .withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -1827,8 +1841,7 @@ class RecordsPageState extends State<RecordsPage> {
                     icon: const Icon(Icons.delete_outline),
                     label: const Text('删除'),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor:
-                          Theme.of(sheetContext).colorScheme.error,
+                      foregroundColor: Theme.of(sheetContext).colorScheme.error,
                     ),
                   ),
                 ],
@@ -2149,9 +2162,7 @@ class RecordsPageState extends State<RecordsPage> {
         .toList();
     final currentFolder = selectedFolder == null
         ? null
-        : folders.firstWhere(
-            (folder) => folder['folder_id'] == selectedFolder,
-          );
+        : folders.firstWhere((folder) => folder['folder_id'] == selectedFolder);
     final parentId = currentFolder?['parent_id'] as int?;
     final bookName = _bookName(bookType);
     return RefreshIndicator(
@@ -2191,10 +2202,10 @@ class RecordsPageState extends State<RecordsPage> {
                   '${diaries.where((diary) => diary['folder_id'] == folder['folder_id']).length} 篇',
                 ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => setState(() => _setSelectedFolder(
-                      bookType,
-                      folder['folder_id'] as int,
-                    )),
+                onTap: () => setState(
+                  () =>
+                      _setSelectedFolder(bookType, folder['folder_id'] as int),
+                ),
               ),
             ),
           if (visible.isEmpty && children.isEmpty)
@@ -2223,8 +2234,7 @@ class RecordsPageState extends State<RecordsPage> {
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
-        builder: (context) =>
-            DiaryFolderManagementPage(bookType: bookType),
+        builder: (context) => DiaryFolderManagementPage(bookType: bookType),
       ),
     );
     if (mounted) await _loadData();
@@ -2264,8 +2274,7 @@ class RecordsPageState extends State<RecordsPage> {
       final parentId = _selectedFolderOf(bookType);
       final duplicate = folders.any(
         (folder) =>
-            folder['folder_name'] == name &&
-            folder['parent_id'] == parentId,
+            folder['folder_name'] == name && folder['parent_id'] == parentId,
       );
       if (duplicate) {
         throw StateError('此文件夹中已有同名文件夹');
@@ -2307,7 +2316,9 @@ class RecordsPageState extends State<RecordsPage> {
     if (!mounted || result == null) return;
     if (result.deleted) {
       try {
-        await CollectionRepository.instance.deleteDiary(diary!['diary_id'] as int);
+        await CollectionRepository.instance.deleteDiary(
+          diary!['diary_id'] as int,
+        );
         await _loadData();
       } catch (error) {
         if (mounted) {
@@ -2341,10 +2352,7 @@ class RecordsPageState extends State<RecordsPage> {
     }
   }
 
-  Future<void> _moveDiary(
-    String bookType,
-    Map<String, dynamic> diary,
-  ) async {
+  Future<void> _moveDiary(String bookType, Map<String, dynamic> diary) async {
     final orderedFolders = _orderedFoldersOf(bookType);
     if (orderedFolders.length < 2) return;
     final selectedFolder = await showModalBottomSheet<int>(
@@ -2415,10 +2423,7 @@ class RecordsPageState extends State<RecordsPage> {
 
   /// C1：点击日记直接进入全屏查看页（编辑器的只读模式），
   /// 在查看页内可切换编辑或删除。
-  Future<void> _showDiary(
-    String bookType,
-    Map<String, dynamic> diary,
-  ) async {
+  Future<void> _showDiary(String bookType, Map<String, dynamic> diary) async {
     final result = await Navigator.push<DiaryEditResult>(
       context,
       MaterialPageRoute<DiaryEditResult>(
@@ -2432,7 +2437,9 @@ class RecordsPageState extends State<RecordsPage> {
     if (!mounted || result == null) return;
     if (result.deleted) {
       try {
-        await CollectionRepository.instance.deleteDiary(diary['diary_id'] as int);
+        await CollectionRepository.instance.deleteDiary(
+          diary['diary_id'] as int,
+        );
         await _loadData();
       } catch (error) {
         if (mounted) {
@@ -2445,17 +2452,14 @@ class RecordsPageState extends State<RecordsPage> {
     if (result.title == null) return;
     try {
       final now = DateTime.now().toIso8601String();
-      await CollectionRepository.instance.saveDiary(
-        {
-          'folder_id': result.folderId,
-          'title': result.title,
-          'content': result.content,
-          'content_format': result.contentFormat,
-          'book_type': bookType,
-          'update_time': now,
-        },
-        id: diary['diary_id'] as int,
-      );
+      await CollectionRepository.instance.saveDiary({
+        'folder_id': result.folderId,
+        'title': result.title,
+        'content': result.content,
+        'content_format': result.contentFormat,
+        'book_type': bookType,
+        'update_time': now,
+      }, id: diary['diary_id'] as int);
       await _loadData();
     } catch (error) {
       if (mounted) {

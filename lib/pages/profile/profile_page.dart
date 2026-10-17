@@ -1,15 +1,14 @@
 import 'dart:async';
 
-import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/pages/profile/appearance_settings_page.dart';
 import 'package:app/pages/profile/backup_management_page.dart';
-import 'package:app/pages/profile/budget_management_page.dart';
+import 'package:app/pages/profile/billing_system_page.dart';
 import 'package:app/pages/profile/data_analysis_page.dart';
 import 'package:app/pages/profile/preference_settings_page.dart';
 import 'package:app/pages/profile/quote_management_page.dart';
 import 'package:app/pages/profile/quote_reply_history_page.dart';
+import 'package:app/pages/profile/tag_management_page.dart';
 import 'package:app/pages/profile/time_capsule_page.dart';
-import 'package:app/routes/app_routes.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
 import 'package:app/stores/notifications/local_notification_service.dart';
@@ -197,71 +196,85 @@ class ProfilePageState extends State<ProfilePage> {
           children: [
             _buildProfileCard(context),
             const SizedBox(height: 16),
-            _buildSectionTitle('通用'),
+            _buildSectionTitle('外观设置'),
             _buildGroupCard([
-              SwitchListTile(
-                secondary: _tileIcon(
-                  Icons.notifications_outlined,
-                  colorScheme.secondary,
-                ),
-                title: const Text('提醒通知'),
-                subtitle: const Text('任务提醒与每日记账提醒'),
-                value: _settings.notificationsEnabled,
-                onChanged: _toggleNotifications,
-              ),
-              _tileDivider(),
               _navTile(
                 icon: Icons.palette_outlined,
                 color: colorScheme.primary,
-                title: '外观与样式',
-                subtitle: '主题、字体与卡片风格',
+                title: '全局配置',
+                subtitle: '页面背景、主题颜色、字体与系统预设',
                 onTap: () => _open(const AppearanceSettingsPage()),
               ),
               _tileDivider(),
               _navTile(
-                icon: Icons.tune_rounded,
-                color: colorScheme.tertiary,
-                title: '个性化参数',
-                subtitle: '兑换比例、提醒时间等',
-                onTap: () => _open(const PreferenceSettingsPage()),
+                icon: Icons.dashboard_customize_outlined,
+                color: colorScheme.secondary,
+                title: '组件外观配置',
+                subtitle: '卡片、轮播图与顶部组件',
+                onTap: () => _open(const AppearanceSettingsPage()),
               ),
             ]),
             const SizedBox(height: 16),
-            _buildSectionTitle('功能管理'),
+            _buildSectionTitle('参数设置'),
             _buildGroupCard([
-              _navTile(
-                icon: Icons.category_outlined,
-                color: colorScheme.primary,
-                title: '记账分类管理',
-                onTap: () => _open(const FinanceCategoryManagementPage()),
-              ),
-              _tileDivider(),
-              _navTile(
-                icon: Icons.account_balance_wallet_outlined,
-                color: colorScheme.tertiary,
-                title: '收支预算',
-                onTap: () => _open(const BudgetManagementPage()),
-              ),
-              _tileDivider(),
               _navTile(
                 icon: Icons.sell_outlined,
                 color: colorScheme.primary,
-                title: '标签管理',
-                onTap: () => Navigator.pushNamed(context, AppRoutes.tags),
+                title: '标签设置',
+                onTap: () => _open(const TagManagementPage()),
               ),
               _tileDivider(),
               _navTile(
-                icon: Icons.format_quote_rounded,
-                color: colorScheme.secondary,
-                title: '今日语录',
-                onTap: () => _open(const QuoteManagementPage()),
+                icon: Icons.stars_outlined,
+                color: colorScheme.tertiary,
+                title: '积分体系',
+                subtitle: '任务奖励、罚金与提醒等通用参数',
+                onTap: () => _open(const PreferenceSettingsPage()),
               ),
               _tileDivider(),
+              _navTile(
+                icon: Icons.receipt_long_outlined,
+                color: colorScheme.secondary,
+                title: '账单体系',
+                subtitle: '记账分类、支出预算与积分兑换比例',
+                onTap: () => _open(const BillingSystemPage()),
+              ),
+              _tileDivider(),
+              _navTile(
+                icon: Icons.tune_rounded,
+                color: colorScheme.primary,
+                title: '基础参数设置',
+                subtitle: '提醒时间与默认提前量',
+                onTap: () => _open(const PreferenceSettingsPage()),
+              ),
+              _tileDivider(),
+              _navTile(
+                icon: Icons.schedule_outlined,
+                color: colorScheme.tertiary,
+                title: '时间设置',
+                subtitle: '提醒时间与默认提前量',
+                onTap: () => _open(const PreferenceSettingsPage()),
+              ),
+              _tileDivider(),
+              SwitchListTile(
+                secondary: _tileIcon(
+                  Icons.notifications_outlined,
+                  colorScheme.primary,
+                ),
+                title: const Text('消息与通知'),
+                subtitle: const Text('任务提醒与每日记账提醒'),
+                value: _settings.notificationsEnabled,
+                onChanged: _toggleNotifications,
+              ),
+            ]),
+            const SizedBox(height: 16),
+            _buildSectionTitle('语录设置'),
+            _buildGroupCard([
               _navTile(
                 icon: Icons.markunread_mailbox_outlined,
-                color: colorScheme.primary,
+                color: colorScheme.secondary,
                 title: '特殊语录',
-                subtitle: '写一句话，未来的某天作为礼物开启',
+                subtitle: '管理写给未来自己的语录',
                 onTap: () => _open(const TimeCapsulePage()),
               ),
               _tileDivider(),
@@ -269,11 +282,19 @@ class ProfilePageState extends State<ProfilePage> {
                 icon: Icons.forum_outlined,
                 color: colorScheme.tertiary,
                 title: '语录回复',
+                subtitle: '查看用户交互场景的回复记录',
                 onTap: () => _open(const QuoteReplyHistoryPage()),
+              ),
+              _tileDivider(),
+              _navTile(
+                icon: Icons.format_quote_rounded,
+                color: colorScheme.primary,
+                title: '今日语录',
+                onTap: () => _open(const QuoteManagementPage()),
               ),
             ]),
             const SizedBox(height: 16),
-            _buildSectionTitle('数据'),
+            _buildSectionTitle('数据设置'),
             _buildGroupCard([
               _navTile(
                 icon: Icons.insights_rounded,
@@ -286,8 +307,8 @@ class ProfilePageState extends State<ProfilePage> {
               _navTile(
                 icon: Icons.backup_outlined,
                 color: colorScheme.secondary,
-                title: '数据备份与恢复',
-                subtitle: '创建、导入和管理备份包',
+                title: '数据备份',
+                subtitle: '创建、恢复和管理备份包',
                 onTap: () => _open(
                   BackupManagementPage(
                     onPersonalDataChanged: widget.onPersonalDataChanged,
@@ -311,10 +332,7 @@ class ProfilePageState extends State<ProfilePage> {
                 ),
                 onTap: _clearPersonalData,
               ),
-            ]),
-            const SizedBox(height: 16),
-            _buildSectionTitle('关于'),
-            _buildGroupCard([
+              _tileDivider(),
               ListTile(
                 leading: _tileIcon(Icons.info_outline, colorScheme.primary),
                 title: const Text('版本信息'),
@@ -369,9 +387,8 @@ class ProfilePageState extends State<ProfilePage> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
-          color: Theme.of(
-            context,
-          ).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context).colorScheme.outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
       child: Column(children: children),
@@ -416,9 +433,8 @@ class ProfilePageState extends State<ProfilePage> {
                       const SizedBox(height: 5),
                       Text(
                         _settings.signature,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: colorScheme.onSurfaceVariant),
                       ),
                     ],
                   ],

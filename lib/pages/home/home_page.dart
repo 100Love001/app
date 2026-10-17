@@ -7,13 +7,17 @@ import 'package:app/stores/home/home_repository.dart';
 import 'package:app/stores/home/quote_repository.dart';
 import 'package:app/stores/home/time_capsule_repository.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
+import 'package:app/stores/tasks/task_repository.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
+import 'package:app/utils/repeat_rule.dart';
 import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  const HomePage({super.key, this.onOpenTasks});
+
+  final VoidCallback? onOpenTasks;
 
   @override
   HomePageState createState() => HomePageState();
@@ -25,6 +29,10 @@ class HomePageState extends State<HomePage> {
   Map<String, dynamic>? _quote;
   Object? _quoteError;
   List<Map<String, dynamic>> _unopenedCapsules = [];
+  int? _pointsBalance;
+  Object? _overviewError;
+  bool _overviewLoading = true;
+  List<Map<String, dynamic>> _todayTasks = [];
 
   @override
   void initState() {
@@ -34,6 +42,7 @@ class HomePageState extends State<HomePage> {
     QuoteRepository.instance.addListener(_onQuotesChanged);
     TimeCapsuleRepository.instance.addListener(_onCapsulesChanged);
     unawaited(vm.refreshData());
+    unawaited(_loadHomeOverview());
     unawaited(_loadQuote());
     unawaited(_loadCapsules());
   }
@@ -122,7 +131,7 @@ class HomePageState extends State<HomePage> {
   }
 
   Future<void> refresh() async {
-    await vm.refreshData();
+    await Future.wait([vm.refreshData(), _loadHomeOverview()]);
   }
 
   Future<void> _loadQuote() async {
@@ -344,7 +353,73 @@ class HomePageState extends State<HomePage> {
   }
 
   Future<void> _refreshHome() async {
-    await vm.refreshData();
+    await refresh();
+  }
+
+  Future<void> _loadHomeOverview() async {
+    if (mounted) {
+      setState(() {
+        _overviewLoading = true;
+        _overviewError = null;
+      });
+    }
+    try {
+      final result = await Future.wait<dynamic>([
+        PointsService.getPointsBalance(),
+        TaskRepository.instance.loadSpecialTasks(),
+        TaskRepository.instance.loadDailyTasks(),
+      ]);
+      final today = DateTime.now();
+      final todayStart = DateTime(today.year, today.month, today.day);
+      bool isToday(Object? value) {
+        final date = DateTime.tryParse('$value');
+        return date != null &&
+            date.year == today.year &&
+            date.month == today.month &&
+            date.day == today.day;
+      }
+
+      final specialTasks = (result[1] as List<Map<String, dynamic>>)
+          .where((task) {
+            if (task['status_tag'] != '进行中') return false;
+            final start = DateTime.tryParse('${task['start_time']}');
+            final end = DateTime.tryParse('${task['end_time']}');
+            return start != null &&
+                end != null &&
+                !todayStart.isBefore(
+                  DateTime(start.year, start.month, start.day),
+                ) &&
+                !todayStart.isAfter(DateTime(end.year, end.month, end.day));
+          })
+          .map((task) => {...task, 'kind': '特殊任务'});
+      final dailyTasks = (result[2] as List<Map<String, dynamic>>)
+          .where((task) {
+            if (task['status_tag'] != '进行中') return false;
+            if (task['task_mode'] == 'habit') {
+              final start = DateTime.tryParse('${task['start_time']}');
+              return start != null &&
+                  RepeatRule.fromColumns(
+                    task['repeat_type'] as String?,
+                    task['repeat_value'] as String?,
+                  ).isDueOn(today, start);
+            }
+            return isToday(task['next_review_time']) ||
+                isToday(task['start_time']);
+          })
+          .map((task) => {...task, 'kind': '日常任务'});
+      if (!mounted) return;
+      setState(() {
+        _pointsBalance = result[0] as int;
+        _todayTasks = [...specialTasks, ...dailyTasks];
+        _overviewLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _overviewError = error;
+        _overviewLoading = false;
+      });
+    }
   }
 
   Future<void> _showCalendar() async {
@@ -560,10 +635,11 @@ class HomePageState extends State<HomePage> {
       (sum, row) => sum + toInt(row['point_value']),
     );
     final pointsBalance = toInt(balanceRows.first['balance']);
-    final isToday = dateKey ==
+    final isToday =
+        dateKey ==
         '${DateTime.now().year.toString().padLeft(4, '0')}-'
-        '${DateTime.now().month.toString().padLeft(2, '0')}-'
-        '${DateTime.now().day.toString().padLeft(2, '0')}';
+            '${DateTime.now().month.toString().padLeft(2, '0')}-'
+            '${DateTime.now().day.toString().padLeft(2, '0')}';
     final completedTaskNames = [
       ...specialTasks.map((row) => row['name'] as String),
       ...dailyTasks.map((row) => row['name'] as String),
@@ -575,10 +651,7 @@ class HomePageState extends State<HomePage> {
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Icon(
-              isToday ? Icons.today : Icons.history_toggle_off,
-              size: 22,
-            ),
+            Icon(isToday ? Icons.today : Icons.history_toggle_off, size: 22),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -598,9 +671,7 @@ class HomePageState extends State<HomePage> {
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primaryContainer
+                    color: Theme.of(context).colorScheme.primaryContainer
                         .withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -634,9 +705,7 @@ class HomePageState extends State<HomePage> {
                       ),
                       const SizedBox(height: 12),
                       Divider(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
+                        color: Theme.of(context).colorScheme.onSurface
                             .withValues(alpha: 0.1),
                       ),
                       const SizedBox(height: 8),
@@ -670,7 +739,8 @@ class HomePageState extends State<HomePage> {
                   Icons.receipt_long,
                   finance.map(
                     (row) => _DetailItem(
-                      label: '${row['category']}'
+                      label:
+                          '${row['category']}'
                           '${(row['remark'] as String?)?.isNotEmpty == true ? '（${row['remark']}）' : ''}',
                       value:
                           '${row['type'] == '收入' ? '+' : '-'}¥${toDouble(row['amount']).toStringAsFixed(2)}',
@@ -789,20 +859,25 @@ class HomePageState extends State<HomePage> {
         children: [
           Row(
             children: [
-              Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                icon,
+                size: 16,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(width: 6),
               Text(
                 title,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
               ),
               const Spacer(),
               Text(
                 '${list.length}项',
                 style: TextStyle(
                   fontSize: 12,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
+                  color: Theme.of(context).colorScheme.onSurface
                       .withValues(alpha: 0.5),
                 ),
               ),
@@ -816,9 +891,7 @@ class HomePageState extends State<HomePage> {
                 emptyText ?? '暂无',
                 style: TextStyle(
                   fontSize: 13,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
+                  color: Theme.of(context).colorScheme.onSurface
                       .withValues(alpha: 0.4),
                 ),
               ),
@@ -826,9 +899,7 @@ class HomePageState extends State<HomePage> {
           else
             Container(
               decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest
+                color: Theme.of(context).colorScheme.surfaceContainerHighest
                     .withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -877,31 +948,74 @@ class HomePageState extends State<HomePage> {
     return ListenableBuilder(
       listenable: vm,
       builder: (context, child) {
+        final nearestAnniversary = vm.anniversaries.isEmpty
+            ? null
+            : vm.anniversaries.first;
         return Scaffold(
           appBar: AppBar(
-            title: InkWell(
-              onTap: _showCalendar,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('今天', style: TextStyle(fontSize: 17)),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
+            title: Row(
+              children: [
+                InkWell(
+                  onTap: _showCalendar,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          vm.currentDate,
-                          style: Theme.of(context).textTheme.labelMedium,
+                        const Text('今天', style: TextStyle(fontSize: 17)),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              vm.currentDate,
+                              style: Theme.of(context).textTheme.labelMedium,
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.calendar_month_outlined, size: 15),
+                          ],
                         ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.calendar_month_outlined, size: 15),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                const Spacer(),
+                Flexible(
+                  child: InkWell(
+                    key: const ValueKey('home-recent-anniversary'),
+                    onTap: () => _openRoute(AppRoutes.anniversaries),
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.event_available_outlined,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 5),
+                          Flexible(
+                            child: Text(
+                              nearestAnniversary == null
+                                  ? '添加纪念日'
+                                  : '${nearestAnniversary.title} · '
+                                        '${_anniversaryCountdown(nearestAnniversary)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelMedium,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           body: RefreshIndicator(
@@ -922,7 +1036,15 @@ class HomePageState extends State<HomePage> {
                   _buildLoadError(context),
                   const SizedBox(height: 12),
                 ],
-                _buildAnniversaryList(context),
+                _buildPointsCard(context),
+                const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Expanded(child: SizedBox.shrink()),
+                    Expanded(child: _buildTodayTasksCard(context)),
+                  ],
+                ),
               ],
             ),
           ),
@@ -1057,47 +1179,103 @@ class HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildAnniversaryList(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+  String _anniversaryCountdown(HomeAnniversary anniversary) {
+    final days = anniversary.daysUntil(DateTime.now());
+    if (days <= 0) return '今天';
+    if (days == 1) return '明天';
+    return '还有 $days 天';
+  }
+
+  Widget _buildPointsCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      key: const ValueKey('home-points-balance'),
+      clipBehavior: Clip.antiAlias,
+      color: scheme.primaryContainer,
+      child: ListTile(
+        leading: Icon(
+          Icons.stars_rounded,
+          color: scheme.onPrimaryContainer,
+          size: 28,
+        ),
+        title: Text(
+          '当前积分总数',
+          style: TextStyle(color: scheme.onPrimaryContainer),
+        ),
+        subtitle: Text(
+          _overviewError != null
+              ? '积分读取失败：$_overviewError'
+              : _overviewLoading
+              ? '正在读取…'
+              : '${_pointsBalance ?? 0} 分',
+          style: TextStyle(color: scheme.onPrimaryContainer),
+        ),
+        trailing: Icon(
+          Icons.chevron_right_rounded,
+          color: scheme.onPrimaryContainer,
+        ),
+        onTap: widget.onOpenTasks,
+      ),
+    );
+  }
+
+  Widget _buildTodayTasksCard(BuildContext context) {
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ListTile(
-            leading: Icon(
-              Icons.event_available_outlined,
-              color: colorScheme.primary,
-            ),
-            title: const Text('纪念日'),
-            trailing: IconButton(
-              tooltip: '管理纪念日',
-              onPressed: () => _openRoute(AppRoutes.anniversaries),
-              icon: const Icon(Icons.chevron_right),
-            ),
-            onTap: () => _openRoute(AppRoutes.anniversaries),
-          ),
-          if (vm.loading && vm.anniversaries.isEmpty)
-            const ListTile(dense: true, title: Text('正在读取…'))
-          else if (vm.anniversaries.isEmpty)
-            const ListTile(dense: true, title: Text('还没有纪念日'))
-          else
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Column(
+      child: InkWell(
+        onTap: widget.onOpenTasks,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  for (final anniversary in vm.anniversaries)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _AnniversaryChip(
-                        anniversary: anniversary,
-                        onTap: () => _openRoute(AppRoutes.anniversaries),
-                      ),
+                  Icon(
+                    Icons.checklist_rounded,
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '今天的任务',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
                     ),
+                  ),
                 ],
               ),
-            ),
-        ],
+              const SizedBox(height: 8),
+              if (_overviewError != null)
+                Text(
+                  '任务读取失败：$_overviewError',
+                  style: Theme.of(context).textTheme.bodySmall,
+                )
+              else if (_overviewLoading)
+                Text('正在读取…', style: Theme.of(context).textTheme.bodySmall)
+              else if (_todayTasks.isEmpty)
+                Text('今天没有任务', style: Theme.of(context).textTheme.bodySmall)
+              else
+                for (final task in _todayTasks.take(4))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Text(
+                      '• ${task['name'] ?? '未命名任务'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+              if (_todayTasks.length > 4 && !_overviewLoading)
+                Text(
+                  '还有 ${_todayTasks.length - 4} 项',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1334,105 +1512,6 @@ class _EmptySlide extends StatelessWidget {
       ],
     ),
   );
-}
-
-class _AnniversaryChip extends StatelessWidget {
-  const _AnniversaryChip({
-    required this.anniversary,
-    required this.onTap,
-  });
-
-  final HomeAnniversary anniversary;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final days = anniversary.daysUntil(DateTime.now());
-    final isToday = days == 0;
-    final isUrgent = days > 0 && days <= 7;
-    final accentColor = isToday
-        ? Colors.red
-        : isUrgent
-        ? Colors.orange
-        : colorScheme.primary;
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: accentColor.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: accentColor.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              anniversary.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: accentColor,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                if (anniversary.tag.isNotEmpty) ...[
-                  Icon(
-                    Icons.label_outline,
-                    size: 12,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 3),
-                  Expanded(
-                    child: Text(
-                      anniversary.tag,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ] else
-                  const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    isToday
-                        ? '今天'
-                        : days == 1
-                        ? '明天'
-                        : '$days天',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: accentColor,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _DetailItem {

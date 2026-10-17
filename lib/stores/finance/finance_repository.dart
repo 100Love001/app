@@ -16,7 +16,7 @@ class FinanceRepository {
     final db = await AppDatabase.instance.database;
     return db.query(
       'finance_categories',
-      orderBy: 'type, is_system DESC, name',
+      orderBy: 'type, is_system DESC, id',
     );
   }
 
@@ -32,27 +32,6 @@ class FinanceRepository {
         ORDER BY REPLACE(p.create_time, 'T', ' ') DESC, p.points_id DESC
         ''',
       );
-
-  Future<List<Map<String, dynamic>>> loadBudgetLimits(List<String> keys) async {
-    final db = await AppDatabase.instance.database;
-    return db.query(
-      'app_settings',
-      columns: ['key', 'value'],
-      where: 'key IN (${List.filled(keys.length, '?').join(', ')})',
-      whereArgs: keys,
-    );
-  }
-
-  Future<List<Map<String, dynamic>>> loadMonthlyBudgetHistory({
-    required String startDate,
-    required String endDate,
-  }) =>
-      AppDatabase.instance.rawQuery('''
-        SELECT budget_date, budget_amount
-        FROM budget_history
-        WHERE budget_date >= ? AND budget_date < ?
-        ORDER BY budget_date DESC
-      ''', [startDate, endDate]);
 
   Future<void> saveRecord(Map<String, dynamic> values, {int? id}) async {
     if (id == null) {
@@ -72,32 +51,4 @@ class FinanceRepository {
     where: 'record_id = ?',
     whereArgs: [id],
   );
-
-  Future<void> recordBudgetSnapshot({
-    required String dateKey,
-    required double amount,
-    required String nowIso,
-  }) =>
-      AppDatabase.instance.rawExecute(
-        'INSERT OR IGNORE INTO budget_history (budget_date, budget_amount, update_time) VALUES (?, ?, ?)',
-        [dateKey, amount, nowIso],
-      );
-
-  Future<List<Map<String, dynamic>>> loadFoodExchangeLastDate() =>
-      AppDatabase.instance.rawQuery(
-        'SELECT MAX(exchange_date) AS last_date FROM food_point_exchanges',
-      );
-
-  Future<double> loadDailyFoodBudget() async {
-    final db = await AppDatabase.instance.database;
-    final rows = await db.query(
-      'app_settings',
-      columns: ['value'],
-      where: 'key = ?',
-      whereArgs: ['daily_food_budget'],
-      limit: 1,
-    );
-    if (rows.isEmpty) return 0.0;
-    return double.tryParse(rows.first['value'] as String) ?? 0.0;
-  }
 }

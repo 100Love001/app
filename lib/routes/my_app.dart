@@ -76,13 +76,13 @@ class _MyAppState extends State<MyApp> {
         _mainPageKey.currentState?.selectTab(2);
       case 'finance':
         navigator.popUntil((route) => route.isFirst);
-        _mainPageKey.currentState?.selectTab(3);
+        _mainPageKey.currentState?.selectTab(1);
       case 'home':
         navigator.popUntil((route) => route.isFirst);
         _mainPageKey.currentState?.selectTab(0);
       case 'records':
         navigator.popUntil((route) => route.isFirst);
-        _mainPageKey.currentState?.selectTab(1);
+        _mainPageKey.currentState?.selectTab(3);
       case 'anniversaries':
         navigator.popUntil((route) => route.isFirst);
         navigator.pushNamed(AppRoutes.anniversaries);

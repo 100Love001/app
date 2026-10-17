@@ -1,6 +1,10 @@
 import 'package:app/main.dart';
+import 'package:app/pages/anniversaries/anniversaries_page.dart';
+import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/pages/profile/appearance_settings_page.dart';
+import 'package:app/pages/profile/billing_system_page.dart';
 import 'package:app/pages/profile/budget_management_page.dart';
+import 'package:app/pages/profile/points_rate_management_page.dart';
 import 'package:app/pages/profile/profile_page.dart';
 import 'package:app/pages/profile/quote_management_page.dart';
 import 'package:app/pages/profile/quote_reply_history_page.dart';
@@ -40,12 +44,21 @@ void main() {
     await tester.pump();
 
     expect(find.byType(NavigationBar), findsOneWidget);
+    final destinations = tester
+        .widget<NavigationBar>(find.byType(NavigationBar))
+        .destinations;
+    expect(
+      destinations
+          .map((destination) => (destination as NavigationDestination).label)
+          .toList(),
+      ['首页', '财务', '任务', '记录', '我的'],
+    );
     expect(find.text('今日语录'), findsOneWidget);
-    expect(find.text('纪念日'), findsOneWidget);
+    expect(find.text('添加纪念日'), findsOneWidget);
     expect(find.byKey(const ValueKey('personal-motto')), findsOneWidget);
     expect(find.text('今日心情'), findsNothing);
     expect(find.text('今日收支'), findsNothing);
-    expect(find.text('今日任务'), findsNothing);
+    expect(find.text('今天的任务'), findsOneWidget);
     expect(find.text('希望清单'), findsNothing);
     expect(find.byTooltip('全局搜索'), findsNothing);
 
@@ -69,6 +82,18 @@ void main() {
     expect(find.text('今日心情'), findsNothing);
   });
 
+  testWidgets('home points card opens the tasks tab', (tester) async {
+    await tester.pumpWidget(const MyApp());
+    await pumpFrames(tester);
+    await tester.tap(find.byKey(const ValueKey('home-points-balance')));
+    await pumpFrames(tester);
+
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      2,
+    );
+  });
+
   testWidgets('records no longer expose mood functionality', (tester) async {
     await tester.pumpWidget(const MyApp());
     await tester.pump();
@@ -88,9 +113,20 @@ void main() {
 
     expect(find.text('生活概览'), findsNothing);
     expect(find.text('生活规划师'), findsOneWidget);
-    expect(find.text('提醒通知'), findsOneWidget);
-    expect(find.text('外观与样式'), findsOneWidget);
-    await tester.tap(find.text('外观与样式'));
+    expect(find.text('全局配置'), findsOneWidget);
+    final profileScroll = find.descendant(
+      of: find.byType(ProfilePage),
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(
+      find.text('消息与通知'),
+      250,
+      scrollable: profileScroll.first,
+    );
+    expect(find.text('消息与通知'), findsOneWidget);
+    await tester.drag(profileScroll.first, const Offset(0, 1000));
+    await pumpFrames(tester);
+    await tester.tap(find.text('全局配置'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
@@ -123,10 +159,23 @@ void main() {
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
 
+    expect(find.text('账单体系'), findsOneWidget);
+    await tapProfileTile(tester, '账单体系');
+    expect(find.byType(BillingSystemPage), findsOneWidget);
+
     expect(find.text('记账分类管理'), findsOneWidget);
-    expect(find.text('收支预算'), findsOneWidget);
-    await tapProfileTile(tester, '收支预算');
+    expect(find.text('支出预算'), findsOneWidget);
+    expect(find.text('积分兑换比例'), findsOneWidget);
+
+    await tester.tap(find.text('支出预算'));
+    await pumpFrames(tester);
     expect(find.byType(BudgetManagementPage), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await pumpFrames(tester);
+
+    await tester.tap(find.text('积分兑换比例'));
+    await pumpFrames(tester);
+    expect(find.byType(PointsRateManagementPage), findsOneWidget);
   });
 
   testWidgets('profile opens the quote management page', (tester) async {
@@ -148,16 +197,16 @@ void main() {
     expect(find.byType(QuoteReplyHistoryPage), findsOneWidget);
   });
 
-  testWidgets('home exposes a tappable anniversary folder entry', (
-    tester,
-  ) async {
+  testWidgets('home shows a tappable recent anniversary', (tester) async {
     await tester.pumpWidget(const MyApp());
-    await tester.pump();
-
-    await tester.ensureVisible(find.text('纪念日'));
-    await tester.pump(const Duration(milliseconds: 500));
-    expect(find.byTooltip('管理纪念日'), findsOneWidget);
-    expect(find.byIcon(Icons.event_available_outlined), findsOneWidget);
+    await pumpFrames(tester);
+    expect(
+      find.byKey(const ValueKey('home-recent-anniversary')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('home-recent-anniversary')));
+    await pumpFrames(tester);
+    expect(find.byType(AnniversariesPage), findsOneWidget);
   });
 
   testWidgets('diary page remains available from records', (tester) async {
@@ -172,12 +221,37 @@ void main() {
     expect(find.text('待补充业务内容'), findsNothing);
   });
 
+  testWidgets('records contains an anniversary tab', (tester) async {
+    await tester.pumpWidget(const MyApp());
+    await tester.pump();
+    await tester.tap(find.text('记录'));
+    await pumpFrames(tester);
+    await tester.tap(find.widgetWithText(ChoiceChip, '纪念日'));
+    await pumpFrames(tester);
+
+    expect(find.byType(AnniversariesPage), findsOneWidget);
+  });
+
+  testWidgets('wish and hope lists are available from tasks', (tester) async {
+    await tester.pumpWidget(const MyApp());
+    await tester.pump();
+    await tester.tap(find.text('任务'));
+    await pumpFrames(tester);
+    await tester.tap(find.widgetWithText(ChoiceChip, '愿望清单'));
+    await pumpFrames(tester);
+    expect(find.byTooltip('新增愿望'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '希望清单'));
+    await pumpFrames(tester);
+    expect(find.byTooltip('新增希望'), findsOneWidget);
+  });
+
   testWidgets('profile opens management for all tag groups', (tester) async {
     await tester.pumpWidget(const MyApp());
     await tester.pump();
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
-    await tapProfileTile(tester, '标签管理');
+    await tapProfileTile(tester, '标签设置');
 
     expect(find.text('全局标签'), findsOneWidget);
     expect(find.text('愿望标签'), findsOneWidget);
@@ -202,8 +276,12 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
-    await tapProfileTile(tester, '记账分类管理');
+    await tapProfileTile(tester, '账单体系');
+    expect(find.byType(BillingSystemPage), findsOneWidget);
 
+    await tester.tap(find.text('记账分类管理'));
+    await pumpFrames(tester);
+    expect(find.byType(FinanceCategoryManagementPage), findsOneWidget);
     expect(find.text('支出分类'), findsOneWidget);
     expect(find.text('收入分类'), findsOneWidget);
     expect(find.byTooltip('新增分类'), findsWidgets);
@@ -216,22 +294,21 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
-    await tapProfileTile(tester, '数据备份与恢复');
+    await tapProfileTile(tester, '数据备份');
 
     expect(find.text('创建备份'), findsOneWidget);
     expect(find.text('导入备份文件'), findsOneWidget);
   });
 
-  testWidgets('preference settings exposes four customizable values', (
+  testWidgets('preference settings exposes three customizable values', (
     tester,
   ) async {
     await tester.pumpWidget(const MyApp());
     await tester.pump();
     await tester.tap(find.text('我的'));
     await pumpFrames(tester);
-    await tapProfileTile(tester, '个性化参数');
+    await tapProfileTile(tester, '基础参数设置');
 
-    expect(find.text('积分兑换比例'), findsOneWidget);
     expect(find.text('每日小结推送时间'), findsOneWidget);
     expect(find.text('纪念日提醒时间'), findsOneWidget);
     expect(find.text('任务默认提前提醒'), findsOneWidget);

@@ -28,7 +28,7 @@ class AppDatabase {
     final password = await EncryptionKeyManager.instance.getOrCreateKey();
     return openDatabase(
       path,
-      version: 18,
+      version: 19,
       password: password,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
@@ -55,40 +55,8 @@ class AppDatabase {
     await InitDbData.insertCollectionSeedData(db);
     await InitDbData.insertQuoteSeedData(db);
     await InitDbData.insertFinanceCategorySeedData(db);
-    final foodBudget = await db.query(
-      'app_settings',
-      columns: ['value'],
-      where: 'key = ?',
-      whereArgs: ['daily_food_budget'],
-      limit: 1,
-    );
-    final now = DateTime.now();
-    final dateKey =
-        '${now.year.toString().padLeft(4, '0')}-'
-        '${now.month.toString().padLeft(2, '0')}-'
-        '${now.day.toString().padLeft(2, '0')}';
-    if (foodBudget.isNotEmpty) {
-      await db.insert('budget_history', {
-        'budget_date': dateKey,
-        'budget_amount':
-            double.tryParse(foodBudget.first['value'] as String) ?? 0,
-      });
-    }
-    // 以“昨天”的 0 元兑换记录作为饭钱结算锚点：新装用户不追溯补发
-    // 安装日之前任何日期的饭钱结余积分（与 clearPersonalData 保持一致）。
-    final yesterday = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).subtract(const Duration(days: 1));
-    await db.insert('food_point_exchanges', {
-      'exchange_date':
-          '${yesterday.year.toString().padLeft(4, '0')}-'
-          '${yesterday.month.toString().padLeft(2, '0')}-'
-          '${yesterday.day.toString().padLeft(2, '0')}',
-      'amount': 0,
-      'points': 0,
-    });
+    // 结算锚点：新装用户不追溯补发安装日之前周期的分类预算积分。
+    await InitDbData.insertCategorySettlementAnchors(db);
   }
 
   // ======================【底层通用原始CRUD方法，不带业务逻辑】======================
@@ -174,6 +142,7 @@ class AppDatabase {
         'points',
         'income_expenses',
         'food_point_exchanges',
+        'category_settlements',
         'anniversaries',
         'time_capsules',
         'quotes',
@@ -182,21 +151,8 @@ class AppDatabase {
       }
       // 与备份恢复流程保持一致：重置自增序列，清空后 id 从 1 重新开始。
       await transaction.delete('sqlite_sequence');
-      final now = DateTime.now();
-      final yesterday = DateTime(
-        now.year,
-        now.month,
-        now.day,
-      ).subtract(const Duration(days: 1));
-      final exchangeDate =
-          '${yesterday.year.toString().padLeft(4, '0')}-'
-          '${yesterday.month.toString().padLeft(2, '0')}-'
-          '${yesterday.day.toString().padLeft(2, '0')}';
-      await transaction.insert('food_point_exchanges', {
-        'exchange_date': exchangeDate,
-        'amount': 0,
-        'points': 0,
-      });
+      // 重新写入结算锚点：清空后不追溯补发此前周期的分类预算积分。
+      await InitDbData.insertCategorySettlementAnchors(transaction);
       await InitDbData.insertQuoteSeedData(transaction);
     });
   }

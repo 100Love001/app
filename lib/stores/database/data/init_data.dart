@@ -1,13 +1,30 @@
 import 'package:sqflite_sqlcipher/sqflite.dart';
-import 'package:app/constants/finance_budgets.dart';
+import 'package:app/constants/app_constants.dart';
+import 'package:app/utils/budget_period.dart';
 
 class InitDbData {
+  /// 默认支出分类：名称、结算周期、周期预算、结余兑换比例、超支扣除比例。
+  /// 这些只是初始状态，用户可在账单体系中任意修改或删除。
+  static const _expenseCategorySeeds = <(String, String, double, int, int)>[
+    ('今日饭钱', BudgetPeriods.daily, 40, AppConstants.foodPointsPerYuan,
+        AppConstants.foodOveragePointsPerYuan),
+    ('今季度衣服费用', BudgetPeriods.quarterly, 0, 0, 0),
+    ('今季度日用品费用', BudgetPeriods.quarterly, 0, 0, 0),
+    ('路费', BudgetPeriods.quarterly, 0, 0, 0),
+    ('其他', BudgetPeriods.quarterly, 0, 0, 0),
+  ];
+
   static Future<void> insertFinanceCategorySeedData(DatabaseExecutor db) async {
-    for (final category in FinanceBudgets.categories) {
+    for (final (name, period, budget, balanceRate, overageRate)
+        in _expenseCategorySeeds) {
       await db.insert('finance_categories', {
         'type': '支出',
-        'name': category.category,
+        'name': name,
         'is_system': 1,
+        'period_type': period,
+        'budget': budget,
+        'balance_rate': balanceRate,
+        'overage_rate': overageRate,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     for (final name in const ['工资', '奖金', '其他收入']) {
@@ -15,6 +32,37 @@ class InitDbData {
         'type': '收入',
         'name': name,
         'is_system': 1,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  /// 为每个可结算支出分类写入「上一个已结束周期」的 0 值结算锚点，
+  /// 使结算循环不会追溯补发安装/升级之前周期的积分。
+  static Future<void> insertCategorySettlementAnchors(
+    DatabaseExecutor db, {
+    DateTime? now,
+  }) async {
+    final current = now ?? DateTime.now();
+    final rows = await db.query(
+      'finance_categories',
+      columns: ['name', 'period_type'],
+      where: "type = '支出' AND period_type != 'none'",
+    );
+    for (final row in rows) {
+      final periodType = row['period_type'] as String;
+      if (!BudgetPeriods.isSettled(periodType)) continue;
+      final currentStart = BudgetPeriods.startOf(periodType, current);
+      final previousStart = BudgetPeriods.startOf(
+        periodType,
+        currentStart.subtract(const Duration(days: 1)),
+      );
+      await db.insert('category_settlements', {
+        'category_name': row['name'],
+        'period_type': periodType,
+        'period_key': BudgetPeriods.keyOf(previousStart),
+        'spent': 0.0,
+        'budget': 0.0,
+        'points': 0,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
@@ -211,11 +259,7 @@ class InitDbData {
     await db.insert('tags', {'tag_name': '生活', 'tag_group': 'global'});
     await db.insert('tags', {'tag_name': '健康', 'tag_group': 'global'});
 
-    // 默认配置
-    await db.insert('app_settings', {
-      'key': 'daily_food_budget',
-      'value': '40',
-    });
+    // 默认积分
     await db.insert('points', {
       'source_type': 'initial',
       'source_id': 1,

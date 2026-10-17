@@ -20,9 +20,9 @@ class _TabItem {
 const _tabs = [
   _TabItem(label: '首页', icon: Icons.home_outlined, selectedIcon: Icons.home),
   _TabItem(
-    label: '记录',
-    icon: Icons.receipt_long_outlined,
-    selectedIcon: Icons.receipt_long,
+    label: '财务',
+    icon: Icons.account_balance_wallet_outlined,
+    selectedIcon: Icons.account_balance_wallet,
   ),
   _TabItem(
     label: '任务',
@@ -30,9 +30,9 @@ const _tabs = [
     selectedIcon: Icons.check_circle,
   ),
   _TabItem(
-    label: '财务',
-    icon: Icons.account_balance_wallet_outlined,
-    selectedIcon: Icons.account_balance_wallet,
+    label: '记录',
+    icon: Icons.receipt_long_outlined,
+    selectedIcon: Icons.receipt_long,
   ),
   _TabItem(label: '我的', icon: Icons.person_outline, selectedIcon: Icons.person),
 ];
@@ -58,10 +58,10 @@ class MainPageState extends State<MainPage> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          HomePage(key: _homeKey),
-          RecordsPage(key: _recordsKey),
-          TasksPage(key: _tasksKey),
+          HomePage(key: _homeKey, onOpenTasks: () => _selectTab(2)),
           FinancePage(key: _financeKey),
+          TasksPage(key: _tasksKey),
+          RecordsPage(key: _recordsKey),
           ProfilePage(
             key: _profileKey,
             onPersonalDataChanged: _refreshAllPages,
@@ -86,9 +86,9 @@ class MainPageState extends State<MainPage> {
   void _selectTab(int index) {
     if (index < 0 || index >= _tabs.length) return;
     if (index == 0) _homeKey.currentState?.refresh();
-    if (index == 1) _recordsKey.currentState?.refresh();
+    if (index == 1) _financeKey.currentState?.refresh();
     if (index == 2) _tasksKey.currentState?.refresh();
-    if (index == 3) _financeKey.currentState?.refresh();
+    if (index == 3) _recordsKey.currentState?.refresh();
     if (index == 4) _profileKey.currentState?.refresh();
     setState(() => _selectedIndex = index);
   }

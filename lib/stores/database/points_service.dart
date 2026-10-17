@@ -1,20 +1,16 @@
 import 'package:app/constants/app_constants.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
+import 'package:app/utils/budget_period.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
-
-class FoodPointExchange {
-  const FoodPointExchange({required this.amount, required this.points});
-
-  final double amount;
-  final int points;
-}
+import 'package:app/utils/time.dart';
 
 class PointsService {
   const PointsService._();
 
-  /// 饭钱结余兑换积分比例（每元 = N 积分），在“我的-个性化参数”中可调。
+  /// 历史饭钱结余兑换比例（每元 = N 积分），默认取全局设置 5。
+  /// 分类周期结算改读 finance_categories.balance_rate，此值仅供旧逻辑与测试。
   static int get foodPointsPerYuan =>
       AppSettingsController.instance.foodPointsPerYuan;
 
@@ -38,15 +34,26 @@ class PointsService {
           JOIN wishes w ON w.wish_id = r.wish_id WHERE r.id = p.source_id)
       WHEN p.source_type = 'expense_deduction' OR p.source_type = 'expense_refund'
         THEN (SELECT category FROM income_expenses WHERE record_id = p.source_id)
+      WHEN p.source_type IN ('category_balance', 'category_overage')
+        THEN (SELECT category_name FROM category_settlements WHERE id = p.source_id)
     END
   ''';
 
-  static int foodPointsForBalance(double remaining) {
+  /// 按「每元结余 = N 积分」把结余金额换算成奖励积分（向下取整）。
+  /// 保留供纯数值计算与回归测试使用；分类结算见 [settleCategoryBudgets]。
+  static int pointsForBalance(double remaining, int pointsPerYuan) {
     if (!remaining.isFinite || remaining < 0) {
       throw ArgumentError.value(remaining, 'remaining', '必须是有效的非负金额');
     }
-    return (remaining * foodPointsPerYuan).floor();
+    if (pointsPerYuan < 0) {
+      throw ArgumentError.value(pointsPerYuan, 'pointsPerYuan', '不能为负数');
+    }
+    return (remaining * pointsPerYuan).floor();
   }
+
+  /// 饭钱分类的历史换算入口（默认比例 5），新分类结算逻辑不再使用。
+  static int foodPointsForBalance(double remaining) =>
+      pointsForBalance(remaining, foodPointsPerYuan);
 
   static DateTime nextDailyReviewDate(DateTime date, int stage) {
     if (stage < 0) throw ArgumentError.value(stage, 'stage', '不能小于零');
@@ -106,7 +113,7 @@ class PointsService {
           'source_id': taskId,
           'point_value': reward,
           'operation_type': '任务奖励',
-          'remark': '完成特殊任务：${rows.first['name']}（${_date(now)} 奖励 $reward 积分）',
+          'remark': '完成特殊任务：${rows.first['name']}（${TimeUtil.toDateKey(now)} 奖励 $reward 积分）',
           'create_time': DateTime.now().toIso8601String(),
         });
       }
@@ -162,7 +169,7 @@ class PointsService {
     required DateTime date,
   }) async {
     final db = await AppDatabase.instance.database;
-    final rewardDate = _date(date);
+    final rewardDate = TimeUtil.toDateKey(date);
     return db.transaction((transaction) async {
       final tasks = await transaction.query(
         'daily_tasks',
@@ -251,7 +258,7 @@ class PointsService {
     required DateTime date,
   }) async {
     final db = await AppDatabase.instance.database;
-    final claimDate = _date(date);
+    final claimDate = TimeUtil.toDateKey(date);
     final claimDay = DateTime(date.year, date.month, date.day);
     return db.transaction((transaction) async {
       final tasks = await transaction.query(
@@ -315,7 +322,7 @@ class PointsService {
   static Future<int?> advanceHope(int hopeId, DateTime date, {int amount = 1}) async {
     if (amount <= 0) amount = 1;
     final db = await AppDatabase.instance.database;
-    final progressDate = _date(date);
+    final progressDate = TimeUtil.toDateKey(date);
     return db.transaction((transaction) async {
       final hopes = await transaction.query(
         'hopes',
@@ -393,7 +400,7 @@ class PointsService {
         'hope_steps',
         {
           'status': '已完成',
-          'completed_at': _date(date),
+          'completed_at': TimeUtil.toDateKey(date),
           'update_time': DateTime.now().toIso8601String(),
         },
         where: 'step_id = ?',
@@ -566,7 +573,7 @@ class PointsService {
       }
       final changed = await transaction.update(
         'hopes',
-        {'status': '已兑换', 'redeemed_at': _date(date)},
+        {'status': '已兑换', 'redeemed_at': TimeUtil.toDateKey(date)},
         where: "hope_id = ? AND status = '进行中' AND progress >= 100",
         whereArgs: [hopeId],
       );
@@ -653,7 +660,7 @@ class PointsService {
     final db = await AppDatabase.instance.database;
     final changed = await db.update(
       'wishes',
-      {'status': WishStatus.redeemed, 'redeemed_at': _date(date)},
+      {'status': WishStatus.redeemed, 'redeemed_at': TimeUtil.toDateKey(date)},
       where:
           'wish_id = ? AND status NOT IN (?, ?) '
           'AND current_points >= required_points',
@@ -725,115 +732,168 @@ class PointsService {
     });
   }
 
-  static Future<FoodPointExchange?> exchangeTodayFoodBalance(
-    DateTime date,
-  ) async {
+  /// 周期结算入口：遍历所有可结算支出分类，把已结束周期的
+  /// 结余按 balance_rate 兑换为积分、超支按 overage_rate 扣除积分。
+  /// 进入财务页时调用；单个分类/周期失败不阻断其余结算（下次进入重试）。
+  static Future<void> settleCategoryBudgets(DateTime now) async {
     final db = await AppDatabase.instance.database;
-    final exchangeDate = _date(date);
-    return db.transaction((transaction) async {
-      final existing = await transaction.query(
-        'food_point_exchanges',
-        where: 'exchange_date = ?',
-        whereArgs: [exchangeDate],
-        limit: 1,
-      );
-      if (existing.isNotEmpty) return null;
+    final categories = await db.query(
+      'finance_categories',
+      where: "type = '支出' AND period_type != 'none'",
+    );
+    for (final category in categories) {
+      final budget = toDouble(category['budget']);
+      final balanceRate = toInt(category['balance_rate']);
+      final overageRate = toInt(category['overage_rate']);
+      // 预算与两种比例都未配置时，结算没有任何效果，跳过。
+      if (budget <= 0 && balanceRate <= 0 && overageRate <= 0) continue;
+      try {
+        await _settleCategoryPeriods(
+          name: category['name'] as String,
+          periodType: category['period_type'] as String,
+          budget: budget,
+          balanceRate: balanceRate,
+          overageRate: overageRate,
+          now: now,
+        );
+      } catch (_) {
+        // 单分类失败不阻断其他分类；该周期未写结算记录，下次自动重试。
+      }
+    }
+  }
 
-      // 饭钱改为用户每日自行记账：当天没有任何手动饭钱记录时
-      // 不结算、不发积分，防止“不吃饭 = 结余全额兑积分”的刷分入口。
-      // 历史自动记录（remark='自动添加每日饭钱'）不计为手动记录。
-      final foodCountRows = await transaction.rawQuery(
+  static Future<void> _settleCategoryPeriods({
+    required String name,
+    required String periodType,
+    required double budget,
+    required int balanceRate,
+    required int overageRate,
+    required DateTime now,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    final currentStart = BudgetPeriods.startOf(periodType, now);
+
+    // 从该分类最近一次已结算周期的下一周期开始；
+    // 没有任何结算记录时（异常库），从最早一笔账单所在周期开始，避免无限回溯。
+    final lastRows = await db.rawQuery(
+      '''SELECT MAX(period_key) AS last_key FROM category_settlements
+         WHERE category_name = ? AND period_type = ?''',
+      [name, periodType],
+    );
+    final lastKey = lastRows.first['last_key'];
+    DateTime cursor;
+    if (lastKey != null) {
+      final lastStart = BudgetPeriods.parseKey('$lastKey');
+      if (lastStart == null) return;
+      cursor = BudgetPeriods.nextStart(periodType, lastStart);
+    } else {
+      final firstRows = await db.rawQuery(
+        '''SELECT MIN(record_date) AS first_date FROM income_expenses
+           WHERE type = '支出' AND category = ?''',
+        [name],
+      );
+      final firstDate = DateTime.tryParse('${firstRows.first['first_date']}');
+      if (firstDate == null) return;
+      cursor = BudgetPeriods.startOf(periodType, firstDate);
+    }
+
+    while (cursor.isBefore(currentStart)) {
+      final start = cursor;
+      final end = BudgetPeriods.nextStart(periodType, start);
+      await _settleOnePeriod(
+        name: name,
+        periodType: periodType,
+        budget: budget,
+        balanceRate: balanceRate,
+        overageRate: overageRate,
+        startKey: BudgetPeriods.keyOf(start),
+        endKey: BudgetPeriods.keyOf(end),
+      );
+      cursor = end;
+    }
+  }
+
+  static Future<void> _settleOnePeriod({
+    required String name,
+    required String periodType,
+    required double budget,
+    required int balanceRate,
+    required int overageRate,
+    required String startKey,
+    required String endKey,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((transaction) async {
+      // 周期内没有任何手动记录时不结算、不发积分，防止“不花钱=结余全额兑积分”；
+      // 该周期不写结算记录，之后补记账（含补录历史日期）时会自动补结算。
+      // 历史自动饭钱记录（remark='自动添加每日饭钱'）不计为手动记录。
+      final countRows = await transaction.rawQuery(
         '''
         SELECT COUNT(*) AS cnt
         FROM income_expenses
-        WHERE type = ? AND category = ? AND record_date = ?
+        WHERE type = '支出' AND category = ?
+          AND record_date >= ? AND record_date < ?
           AND (remark IS NULL OR remark != '自动添加每日饭钱')
         ''',
-        ['支出', '今日饭钱', exchangeDate],
+        [name, startKey, endKey],
       );
-      if (toInt(foodCountRows.first['cnt']) == 0) return null;
+      if (toInt(countRows.first['cnt']) == 0) return;
 
-      final budgets = await transaction.rawQuery(
-        '''
-        SELECT value
-        FROM (
-          SELECT budget_amount AS value
-          FROM budget_history
-          WHERE budget_date <= ?
-          ORDER BY budget_date DESC
-          LIMIT 1
-        )
-        UNION ALL
-        SELECT value
-        FROM app_settings
-        WHERE key = ? AND NOT EXISTS (
-          SELECT 1 FROM budget_history WHERE budget_date <= ?
-        )
-        LIMIT 1
-        ''',
-        [exchangeDate, 'daily_food_budget', exchangeDate],
-      );
-      final budget = budgets.isEmpty ? 0.0 : toDouble(budgets.first['value']);
-      if (!budget.isFinite || budget < 0) {
-        throw StateError('今日饭钱预算必须是有效的非负金额');
-      }
       final spentRows = await transaction.rawQuery(
         '''
         SELECT COALESCE(SUM(amount), 0) AS spent
         FROM income_expenses
-        WHERE type = ? AND category = ? AND record_date = ?
+        WHERE type = '支出' AND category = ?
+          AND record_date >= ? AND record_date < ?
           AND (remark IS NULL OR remark != '自动添加每日饭钱')
         ''',
-        ['支出', '今日饭钱', exchangeDate],
+        [name, startKey, endKey],
       );
       final spent = toDouble(spentRows.first['spent']);
+      if (!budget.isFinite || budget < 0) {
+        throw StateError('$name的预算必须是有效的非负金额');
+      }
       final remaining = budget - spent;
-      final clampedRemaining = remaining.clamp(0.0, budget);
-      final points = foodPointsForBalance(clampedRemaining);
+      final periodLabel = BudgetPeriods.labelOf(periodType);
+      var points = 0;
+      var sourceType = 'category_balance';
+      var operationType = '预算结余兑换';
+      String remark;
+      if (remaining >= 0) {
+        points = pointsForBalance(remaining, balanceRate);
+        remark =
+            '$name（$periodLabel）结余 ¥${remaining.toStringAsFixed(2)} '
+            '兑换 $points 积分';
+      } else {
+        final overage = -remaining;
+        points = -(overage * overageRate).ceil();
+        sourceType = 'category_overage';
+        operationType = '预算超支扣除';
+        remark =
+            '$name（$periodLabel）超支 ¥${overage.toStringAsFixed(2)} '
+            '扣除 ${-points} 积分';
+      }
 
-      await transaction.insert('food_point_exchanges', {
-        'exchange_date': exchangeDate,
-        'amount': clampedRemaining,
+      final settlementId = await transaction.insert('category_settlements', {
+        'category_name': name,
+        'period_type': periodType,
+        'period_key': startKey,
+        'spent': spent,
+        'budget': budget,
         'points': points,
       });
-      if (points > 0) {
+      if (points != 0) {
         await transaction.insert('points', {
-          'source_type': 'food_balance',
-          'source_id': _dateKey(date),
+          'source_type': sourceType,
+          'source_id': settlementId,
           'point_value': points,
-          'operation_type': '饭钱兑换',
-          'remark': '饭钱结余 ¥${clampedRemaining.toStringAsFixed(2)} 自动兑换',
+          'operation_type': operationType,
+          'remark': remark,
           'create_time': DateTime.now().toIso8601String(),
         });
       }
-
-      if (remaining < 0) {
-        final overage = -remaining;
-        final overagePoints =
-            (overage * AppConstants.foodOveragePointsPerYuan).ceil();
-        if (overagePoints > 0) {
-          await transaction.insert('points', {
-            'source_type': 'food_overage',
-            'source_id': _dateKey(date),
-            'point_value': -overagePoints,
-            'operation_type': '饭钱超支扣除',
-            'remark': '饭钱超支 ¥${overage.toStringAsFixed(2)} 扣除 $overagePoints 积分',
-            'create_time': DateTime.now().toIso8601String(),
-          });
-        }
-      }
-
-      return FoodPointExchange(amount: clampedRemaining, points: points);
     });
   }
-
-  static String _date(DateTime value) =>
-      '${value.year.toString().padLeft(4, '0')}-'
-      '${value.month.toString().padLeft(2, '0')}-'
-      '${value.day.toString().padLeft(2, '0')}';
-
-  static int _dateKey(DateTime value) =>
-      value.year * 10000 + value.month * 100 + value.day;
 
   /// 结算日常任务未完成扣除：检查所有进行中的日常任务，如果下次复习时间已过
   /// （超过1天未领取奖励），则扣除相应的惩罚积分。每个任务每天只扣除一次。
@@ -873,7 +933,7 @@ class PointsService {
 
         if (daysOverdue > 1) {
           final taskId = toInt(task['id']);
-          final penaltyDate = _date(today);
+          final penaltyDate = TimeUtil.toDateKey(today);
 
           final existing = await txn.query(
             'points',

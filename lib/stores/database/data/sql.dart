@@ -355,13 +355,39 @@ class TableSql {
     )
   ''';
 
+  // period_type：支出分类的预算结算周期。
+  //   none=不结算（收入分类），daily=每天，weekly=每周（周一起），
+  //   monthly=每月，quarterly=每季度。
+  // budget：周期预算金额；balance_rate：结余每元兑换积分；
+  // overage_rate：超支每元扣除积分。
   static const String createFinanceCategories = '''
     CREATE TABLE IF NOT EXISTS finance_categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       type TEXT NOT NULL,
       name TEXT NOT NULL,
       is_system INTEGER NOT NULL DEFAULT 0,
+      period_type TEXT NOT NULL DEFAULT 'none',
+      budget REAL NOT NULL DEFAULT 0,
+      balance_rate INTEGER NOT NULL DEFAULT 0,
+      overage_rate INTEGER NOT NULL DEFAULT 0,
       UNIQUE(type, name)
+    )
+  ''';
+
+  // 支出分类周期结算记录：一个分类一个周期最多一条。
+  // period_key 统一存周期起始日（yyyy-MM-dd），与 period_type 共同唯一确定周期；
+  // points 带符号：结余兑换为正，超支扣除为负。
+  static const String createCategorySettlements = '''
+    CREATE TABLE IF NOT EXISTS category_settlements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_name TEXT NOT NULL,
+      period_type TEXT NOT NULL,
+      period_key TEXT NOT NULL,
+      spent REAL NOT NULL DEFAULT 0,
+      budget REAL NOT NULL DEFAULT 0,
+      points INTEGER NOT NULL DEFAULT 0,
+      create_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
+      UNIQUE(category_name, period_type, period_key)
     )
   ''';
 
@@ -514,6 +540,7 @@ class TableSql {
     createTaskReviews,
     createIncomeExpenses,
     createFinanceCategories,
+    createCategorySettlements,
     createBudgetHistory,
     createPoints,
     createTags,

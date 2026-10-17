@@ -1,11 +1,12 @@
 import 'dart:async';
 
-import 'package:app/constants/finance_budgets.dart';
-import 'package:app/stores/database/add_database.dart';
-import 'package:app/utils/time.dart';
+import 'package:app/stores/finance/finance_category_repository.dart';
+import 'package:app/utils/budget_period.dart';
+import 'package:app/utils/num_cast.dart';
 import 'package:flutter/material.dart';
-import 'package:sqflite_sqlcipher/sqflite.dart';
 
+/// 支出预算：为「记账分类管理」中的每个支出分类设置周期预算。
+/// 周期结束时，结余按兑换比例兑积分、超支按比例扣积分（见 PointsService）。
 class BudgetManagementPage extends StatefulWidget {
   const BudgetManagementPage({super.key});
 
@@ -14,62 +15,48 @@ class BudgetManagementPage extends StatefulWidget {
 }
 
 class _BudgetManagementPageState extends State<BudgetManagementPage> {
-  final Map<String, double> _budgets = {};
-  Object? _budgetError;
+  List<Map<String, dynamic>> _categories = [];
+  Object? _error;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_loadBudgets());
+    unawaited(_loadCategories());
   }
 
-  Future<void> _loadBudgets() async {
+  Future<void> _loadCategories() async {
     try {
-      final keys = FinanceBudgets.categories
-          .map((category) => category.settingKey)
-          .toList();
-      final rows = await AppDatabase.instance.database.then(
-        (db) => db.query(
-          'app_settings',
-          columns: ['key', 'value'],
-          where: 'key IN (${List.filled(keys.length, '?').join(', ')})',
-          whereArgs: keys,
-        ),
-      );
+      final rows =
+          await FinanceCategoryRepository.instance.loadExpenseCategories();
       if (!mounted) return;
       setState(() {
-        _budgetError = null;
-        _budgets
-          ..clear()
-          ..addEntries(
-            rows.map(
-              (row) => MapEntry(
-                row['key']! as String,
-                double.tryParse(row['value']! as String) ?? 0,
-              ),
-            ),
-          );
+        _error = null;
+        _categories = rows;
       });
     } catch (error) {
-      if (mounted) setState(() => _budgetError = error);
+      if (mounted) setState(() => _error = error);
     }
   }
 
-  Future<void> _editBudget(FinanceBudgetCategory category) async {
+  Future<void> _editBudget(Map<String, dynamic> category) async {
     final controller = TextEditingController(
-      text: (_budgets[category.settingKey] ?? 0).toStringAsFixed(2),
+      text: toDouble(category['budget']).toStringAsFixed(2),
     );
+    final periodLabel =
+        BudgetPeriods.labelOf(category['period_type'] as String? ?? 'none');
     final amount = await showDialog<double>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
-        title: Text('设置${category.period}${category.budgetLabel}预算'),
+        title: Text('设置${category['name']}预算'),
         content: TextField(
           controller: controller,
+          autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: '预算金额',
+          decoration: InputDecoration(
+            labelText: '$periodLabel预算金额',
             prefixText: '¥ ',
+            helperText: '结算周期：$periodLabel（在记账分类管理中修改）',
           ),
         ),
         actions: [
@@ -81,8 +68,9 @@ class _BudgetManagementPageState extends State<BudgetManagementPage> {
             onPressed: () {
               final value = double.tryParse(controller.text.trim());
               if (value == null || !value.isFinite || value < 0) {
-                ScaffoldMessenger.of(dialogContext)
-                    .showSnackBar(const SnackBar(content: Text('请输入有效的非负金额')));
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('请输入有效的非负金额')),
+                );
                 return;
               }
               Navigator.pop(dialogContext, value);
@@ -95,27 +83,16 @@ class _BudgetManagementPageState extends State<BudgetManagementPage> {
     controller.dispose();
     if (amount == null || !mounted) return;
     try {
-      final db = await AppDatabase.instance.database;
-      await db.transaction((transaction) async {
-        await transaction.insert('app_settings', {
-          'key': category.settingKey,
-          'value': amount.toStringAsFixed(2),
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-        if (category.settingKey == 'daily_food_budget') {
-          final tomorrow = DateTime.now().add(const Duration(days: 1));
-          await transaction.insert('budget_history', {
-            'budget_date': TimeUtil.toDateKey(tomorrow),
-            'budget_amount': amount,
-            'update_time': DateTime.now().toIso8601String(),
-          }, conflictAlgorithm: ConflictAlgorithm.replace);
-        }
-      });
-      if (!mounted) return;
-      setState(() => _budgets[category.settingKey] = amount);
+      await FinanceCategoryRepository.instance.updateBudget(
+        id: category['id'] as int,
+        budget: amount,
+      );
+      await _loadCategories();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('保存预算失败：$error')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存预算失败：$error')));
       }
     }
   }
@@ -124,46 +101,43 @@ class _BudgetManagementPageState extends State<BudgetManagementPage> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('收支预算')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-        children: [
-          if (_budgetError != null)
-            Card(
-              child: ListTile(
-                leading: Icon(Icons.error_outline, color: colorScheme.error),
-                title: const Text('收支预算读取失败'),
-                subtitle: Text('$_budgetError'),
-                trailing: IconButton(
-                  tooltip: '重试',
-                  onPressed: _loadBudgets,
-                  icon: const Icon(Icons.refresh),
-                ),
+      appBar: AppBar(title: const Text('支出预算')),
+      body: _error != null
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('预算读取失败：$_error'),
+                  TextButton(
+                    onPressed: _loadCategories,
+                    child: const Text('重试'),
+                  ),
+                ],
               ),
-            ),
-          for (var index = 0; index < FinanceBudgets.categories.length; index++)
-            Card(
-              child: Builder(
-                builder: (context) {
-                  final category = FinanceBudgets.categories[index];
-                  final amount = _budgets[category.settingKey] ?? 0;
-                  return ListTile(
-                    leading: Icon(
-                      category.settingKey == 'daily_food_budget'
-                          ? Icons.restaurant_outlined
-                          : Icons.payments_outlined,
-                      color: colorScheme.primary,
+            )
+          : _categories.isEmpty
+          ? const Center(child: Text('暂无支出分类，请先在记账分类管理中添加'))
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+              children: [
+                for (final category in _categories)
+                  Card(
+                    child: ListTile(
+                      leading: Icon(
+                        Icons.payments_outlined,
+                        color: colorScheme.primary,
+                      ),
+                      title: Text(category['name'] as String),
+                      subtitle: Text(
+                        '${BudgetPeriods.labelOf(category['period_type'] as String? ?? 'none')}预算 '
+                        '¥${toDouble(category['budget']).toStringAsFixed(2)}',
+                      ),
+                      trailing: const Icon(Icons.edit_outlined, size: 19),
+                      onTap: () => _editBudget(category),
                     ),
-                    title: Text('${category.period}${category.budgetLabel}预算'),
-                    subtitle: Text('预算 ¥${amount.toStringAsFixed(2)}'),
-                    trailing: const Icon(Icons.edit_outlined, size: 19),
-                    onTap: () => _editBudget(category),
-                  );
-                },
-              ),
+                  ),
+              ],
             ),
-        ],
-      ),
     );
   }
 }

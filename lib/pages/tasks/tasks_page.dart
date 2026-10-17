@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:app/constants/app_constants.dart';
+import 'package:app/pages/records/records_page.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/notifications/local_notification_service.dart';
@@ -14,7 +15,7 @@ import 'package:app/utils/time.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-enum _TaskSection { special, daily }
+enum _TaskSection { special, daily, wishes, hopes }
 
 /// B2：特殊任务提醒的预设提前量（分钟）。0 表示准时提醒。
 const List<int> _specialReminderPresets = [0, 15, 30, 60, 1440, 4320, 10080];
@@ -183,8 +184,7 @@ class TasksPageState extends State<TasksPage> {
         : task['status_tag'] as String;
     if (status != '进行中' ||
         (!isSpecial &&
-            (_dailyRewardClaimedToday(task) ||
-                !_dailyClaimableToday(task)))) {
+            (_dailyRewardClaimedToday(task) || !_dailyClaimableToday(task)))) {
       return;
     }
     final id = task['id'] as int;
@@ -214,9 +214,8 @@ class TasksPageState extends State<TasksPage> {
         final message = isSpecial
             ? (reward > 0 ? '任务完成，获得 $reward 积分' : '任务已完成')
             : '已领取今日任务奖励：$reward 积分';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
       }
     } catch (error) {
       if (!mounted) return;
@@ -251,13 +250,7 @@ class TasksPageState extends State<TasksPage> {
       await _loadTasks();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            ok
-                ? '已补标记完成（不计积分）'
-                : '任务当前不可补完成，请刷新后重试',
-          ),
-        ),
+        SnackBar(content: Text(ok ? '已补标记完成（不计积分）' : '任务当前不可补完成，请刷新后重试')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -287,14 +280,12 @@ class TasksPageState extends State<TasksPage> {
   }
 
   /// B1：习惯型日常任务判定。
-  bool _isHabitTask(Map<String, dynamic> task) =>
-      task['task_mode'] == 'habit';
+  bool _isHabitTask(Map<String, dynamic> task) => task['task_mode'] == 'habit';
 
-  RepeatRule _repeatRuleOf(Map<String, dynamic> task) =>
-      RepeatRule.fromColumns(
-        task['repeat_type'] as String?,
-        task['repeat_value'] as String?,
-      );
+  RepeatRule _repeatRuleOf(Map<String, dynamic> task) => RepeatRule.fromColumns(
+    task['repeat_type'] as String?,
+    task['repeat_value'] as String?,
+  );
 
   /// B1：习惯任务今天是否为打卡日。
   bool _habitDueToday(Map<String, dynamic> task) {
@@ -403,9 +394,7 @@ class TasksPageState extends State<TasksPage> {
         );
         if (stored.isNotEmpty) {
           reminderTimes = stored
-              .map(
-                (time) => TimeOfDay(hour: time.hour, minute: time.minute),
-              )
+              .map((time) => TimeOfDay(hour: time.hour, minute: time.minute))
               .toList();
         }
       } catch (_) {
@@ -592,9 +581,8 @@ class TasksPageState extends State<TasksPage> {
                           ChoiceChip(
                             label: Text(entry.$2),
                             selected: repeatType == entry.$1,
-                            onSelected: (_) => setDialogState(
-                              () => repeatType = entry.$1,
-                            ),
+                            onSelected: (_) =>
+                                setDialogState(() => repeatType = entry.$1),
                           ),
                       ],
                     ),
@@ -607,8 +595,15 @@ class TasksPageState extends State<TasksPage> {
                             for (var weekday = 1; weekday <= 7; weekday++)
                               FilterChip(
                                 label: Text(
-                                  const ['一', '二', '三', '四', '五', '六', '日']
-                                      [weekday - 1],
+                                  const [
+                                    '一',
+                                    '二',
+                                    '三',
+                                    '四',
+                                    '五',
+                                    '六',
+                                    '日',
+                                  ][weekday - 1],
                                 ),
                                 selected: selectedWeekdays.contains(weekday),
                                 onSelected: (checked) => setDialogState(() {
@@ -667,9 +662,11 @@ class TasksPageState extends State<TasksPage> {
                       spacing: 8,
                       runSpacing: 4,
                       children: [
-                        for (var index = 0;
-                            index < reminderTimes.length;
-                            index++)
+                        for (
+                          var index = 0;
+                          index < reminderTimes.length;
+                          index++
+                        )
                           Chip(
                             label: Text(reminderTimes[index].format(context)),
                             onDeleted: reminderTimes.length <= 1
@@ -776,8 +773,8 @@ class TasksPageState extends State<TasksPage> {
                       for (final minutes
                           in selectedReminders
                               .where(
-                                (value) => !_specialReminderPresets
-                                    .contains(value),
+                                (value) =>
+                                    !_specialReminderPresets.contains(value),
                               )
                               .toList()
                             ..sort())
@@ -793,9 +790,7 @@ class TasksPageState extends State<TasksPage> {
                         onPressed: () async {
                           final custom = await _askCustomReminder(context);
                           if (custom != null) {
-                            setDialogState(
-                              () => selectedReminders.add(custom),
-                            );
+                            setDialogState(() => selectedReminders.add(custom));
                           }
                         },
                       ),
@@ -824,11 +819,11 @@ class TasksPageState extends State<TasksPage> {
                   ).showSnackBar(const SnackBar(content: Text('请输入有效的非负积分')));
                   return;
                 }
-                final penalty = int.tryParse(penaltyController.text.trim()) ?? 0;
+                final penalty =
+                    int.tryParse(penaltyController.text.trim()) ?? 0;
                 if (penalty < 0) {
-                  ScaffoldMessenger.of(
-                    dialogContext,
-                  ).showSnackBar(const SnackBar(content: Text('扣除积分不能为负数')));
+                  ScaffoldMessenger.of(dialogContext)
+                      .showSnackBar(const SnackBar(content: Text('扣除积分不能为负数')));
                   return;
                 }
                 if (special && end.isBefore(start)) {
@@ -842,27 +837,23 @@ class TasksPageState extends State<TasksPage> {
                 if (!special && habitMode) {
                   if (repeatType == RepeatType.weekly &&
                       selectedWeekdays.isEmpty) {
-                    ScaffoldMessenger.of(dialogContext).showSnackBar(
-                      const SnackBar(content: Text('请至少选择一个星期')),
-                    );
+                    ScaffoldMessenger.of(
+                      dialogContext,
+                    ).showSnackBar(const SnackBar(content: Text('请至少选择一个星期')));
                     return;
                   }
                   if (repeatType == RepeatType.monthly &&
                       selectedMonthDays.isEmpty) {
-                    ScaffoldMessenger.of(dialogContext).showSnackBar(
-                      const SnackBar(content: Text('请至少选择一个日期')),
-                    );
+                    ScaffoldMessenger.of(
+                      dialogContext,
+                    ).showSnackBar(const SnackBar(content: Text('请至少选择一个日期')));
                     return;
                   }
                   if (repeatType == RepeatType.interval) {
-                    final days = int.tryParse(
-                      intervalController.text.trim(),
-                    );
+                    final days = int.tryParse(intervalController.text.trim());
                     if (days == null || days < 1) {
                       ScaffoldMessenger.of(dialogContext).showSnackBar(
-                        const SnackBar(
-                          content: Text('请输入有效的间隔天数（至少 1 天）'),
-                        ),
+                        const SnackBar(content: Text('请输入有效的间隔天数（至少 1 天）')),
                       );
                       return;
                     }
@@ -912,8 +903,7 @@ class TasksPageState extends State<TasksPage> {
                       'task_mode': habitMode ? 'habit' : 'review',
                       'repeat_type': habitMode ? repeatType.name : 'daily',
                       'repeat_value': habitMode ? repeatValue : null,
-                      if (task != null &&
-                          toInt(task['review_stage']) == 0)
+                      if (task != null && toInt(task['review_stage']) == 0)
                         'next_review_time': start.toIso8601String(),
                     };
                     await repo.saveDailyTask(
@@ -923,10 +913,8 @@ class TasksPageState extends State<TasksPage> {
                       reminders: habitMode
                           ? reminderTimes
                                 .map(
-                                  (time) => (
-                                    hour: time.hour,
-                                    minute: time.minute,
-                                  ),
+                                  (time) =>
+                                      (hour: time.hour, minute: time.minute),
                                 )
                                 .toList()
                           : const [],
@@ -1057,9 +1045,8 @@ class TasksPageState extends State<TasksPage> {
       );
       await _loadTasks();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('任务已开始，截止时间不变')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('任务已开始，截止时间不变')));
       }
     } catch (error) {
       if (mounted) {
@@ -1115,9 +1102,8 @@ class TasksPageState extends State<TasksPage> {
     var reminderText = '';
     if (isSpecial) {
       try {
-        final reminders = await TaskRepository.instance.loadSpecialTaskReminders(
-          task['id'] as int,
-        );
+        final reminders = await TaskRepository.instance
+            .loadSpecialTaskReminders(task['id'] as int);
         if (reminders.isNotEmpty) {
           reminderText = reminders.map(_reminderLeadLabel).join('、');
         }
@@ -1206,9 +1192,8 @@ class TasksPageState extends State<TasksPage> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.secondaryContainer.withValues(alpha: 0.4),
+                    color: Theme.of(context).colorScheme.secondaryContainer
+                        .withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text('要求：${(task['requirement'] as String).trim()}'),
@@ -1256,9 +1241,7 @@ class TasksPageState extends State<TasksPage> {
                     return SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
-                        onPressed: status != '进行中' ||
-                                rewardClaimedToday ||
-                                !due
+                        onPressed: status != '进行中' || rewardClaimedToday || !due
                             ? null
                             : () => Navigator.pop(context, 'complete'),
                         icon: const Icon(Icons.check),
@@ -1452,54 +1435,85 @@ class TasksPageState extends State<TasksPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('任务'),
-        actions: [
-          PopupMenuButton<String>(
-            tooltip: '添加任务',
-            onSelected: (value) => _addTask(special: value == 'special'),
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: 'special', child: Text('添加特殊任务')),
-              PopupMenuItem(value: 'daily', child: Text('添加日常任务')),
-            ],
-            icon: const Icon(Icons.add),
+        actions:
+            _section == _TaskSection.special || _section == _TaskSection.daily
+            ? [
+                PopupMenuButton<String>(
+                  tooltip: '添加任务',
+                  onSelected: (value) => _addTask(special: value == 'special'),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'special', child: Text('添加特殊任务')),
+                    PopupMenuItem(value: 'daily', child: Text('添加日常任务')),
+                  ],
+                  icon: const Icon(Icons.add),
+                ),
+                IconButton(
+                  tooltip: '刷新任务',
+                  onPressed: _loading ? null : _loadTasks,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ]
+            : null,
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _buildSectionTabs(),
           ),
-          IconButton(
-            tooltip: '刷新任务',
-            onPressed: _loading ? null : _loadTasks,
-            icon: const Icon(Icons.refresh),
+          Expanded(
+            child:
+                _section == _TaskSection.wishes ||
+                    _section == _TaskSection.hopes
+                ? RecordsPage(
+                    key: ValueKey(_section),
+                    taskListsOnly: true,
+                    openHopes: _section == _TaskSection.hopes,
+                  )
+                : _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                ? _ErrorState(message: _error!, onRetry: _loadTasks)
+                : RefreshIndicator(
+                    onRefresh: _loadTasks,
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                      children: [
+                        _buildToday(),
+                        const SizedBox(height: 12),
+                        if (_section == _TaskSection.special) _buildSpecial(),
+                        if (_section == _TaskSection.daily) _buildDaily(),
+                      ],
+                    ),
+                  ),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? _ErrorState(message: _error!, onRetry: _loadTasks)
-          : RefreshIndicator(
-              onRefresh: _loadTasks,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                children: [
-                  _buildToday(),
-                  const SizedBox(height: 16),
-                  _buildSectionTabs(),
-                  const SizedBox(height: 12),
-                  if (_section == _TaskSection.special) _buildSpecial(),
-                  if (_section == _TaskSection.daily) _buildDaily(),
-                ],
-              ),
-            ),
     );
   }
 
   Widget _buildSectionTabs() {
-    return SegmentedButton<_TaskSection>(
-      segments: const [
-        ButtonSegment(value: _TaskSection.special, label: Text('特殊任务')),
-        ButtonSegment(value: _TaskSection.daily, label: Text('日常任务')),
-      ],
-      selected: {_section},
-      onSelectionChanged: (selected) =>
-          setState(() => _section = selected.first),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final entry in const [
+            (_TaskSection.special, '特殊任务'),
+            (_TaskSection.daily, '日常任务'),
+            (_TaskSection.wishes, '愿望清单'),
+            (_TaskSection.hopes, '希望清单'),
+          ])
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(entry.$2),
+                selected: _section == entry.$1,
+                onSelected: (_) => setState(() => _section = entry.$1),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -1651,10 +1665,7 @@ class TasksPageState extends State<TasksPage> {
 
   Future<void> _setDailyStatus(Map<String, dynamic> task, String status) async {
     try {
-      await TaskRepository.instance.setDailyStatus(
-        task['id'] as int,
-        status,
-      );
+      await TaskRepository.instance.setDailyStatus(task['id'] as int, status);
       await _loadTasks();
     } catch (error) {
       if (mounted) {
@@ -1738,8 +1749,7 @@ class TasksPageState extends State<TasksPage> {
     final claimDue = !isSpecial && _dailyClaimableToday(task);
     final completed = isSpecial && status == '已完成';
     final canComplete =
-        status == '进行中' &&
-        (isSpecial || (!rewardClaimedToday && claimDue));
+        status == '进行中' && (isSpecial || (!rewardClaimedToday && claimDue));
     return ListTile(
       onTap: () => _showTaskDetails(task),
       leading: IconButton(
@@ -1849,7 +1859,9 @@ class _TodayTaskCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final isSpecial = task['kind'] == '特殊任务';
     final accentColor = isSpecial ? colorScheme.tertiary : colorScheme.primary;
-    final rewardPoints = toInt(task[isSpecial ? 'reward_points' : 'daily_points']);
+    final rewardPoints = toInt(
+      task[isSpecial ? 'reward_points' : 'daily_points'],
+    );
     final penaltyPoints = toInt(task['penalty_points']);
     final tagName = task['tag_name'] as String? ?? '未分类';
 
@@ -1861,9 +1873,7 @@ class _TodayTaskCard extends StatelessWidget {
         onTap: onTap,
         child: Container(
           decoration: BoxDecoration(
-            border: Border(
-              left: BorderSide(color: accentColor, width: 4),
-            ),
+            border: Border(left: BorderSide(color: accentColor, width: 4)),
           ),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -1901,9 +1911,8 @@ class _TodayTaskCard extends StatelessWidget {
                       ),
                       child: Text(
                         tagName,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
+                        style: Theme.of(context).textTheme.labelSmall
+                            ?.copyWith(color: colorScheme.onSurfaceVariant),
                       ),
                     ),
                     const Spacer(),
@@ -1920,14 +1929,19 @@ class _TodayTaskCard extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.check_circle, size: 14, color: Colors.green[700]),
+                            Icon(
+                              Icons.check_circle,
+                              size: 14,
+                              color: Colors.green[700],
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               '已领取',
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                color: Colors.green[700],
-                                fontWeight: FontWeight.w600,
-                              ),
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: Colors.green[700],
+                                    fontWeight: FontWeight.w600,
+                                  ),
                             ),
                           ],
                         ),
@@ -1955,18 +1969,16 @@ class _TodayTaskCard extends StatelessWidget {
                   task['name'] as String,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   task['content'] as String? ?? '点击查看详细内容',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -1984,7 +1996,11 @@ class _TodayTaskCard extends StatelessWidget {
                     ],
                     if (penaltyPoints > 0) ...[
                       const SizedBox(width: 12),
-                      Icon(Icons.remove_circle_outline, size: 14, color: colorScheme.error),
+                      Icon(
+                        Icons.remove_circle_outline,
+                        size: 14,
+                        color: colorScheme.error,
+                      ),
                       const SizedBox(width: 3),
                       Text(
                         '-$penaltyPoints',
@@ -2020,13 +2036,16 @@ class _TodayTaskCard extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.hourglass_bottom, size: 13, color: colorScheme.onSurfaceVariant),
+        Icon(
+          Icons.hourglass_bottom,
+          size: 13,
+          color: colorScheme.onSurfaceVariant,
+        ),
         const SizedBox(width: 3),
         Text(
           '剩余 $remaining 天',
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.labelSmall
+              ?.copyWith(color: colorScheme.onSurfaceVariant),
         ),
       ],
     );
@@ -2041,9 +2060,8 @@ class _TodayTaskCard extends StatelessWidget {
         const SizedBox(width: 3),
         Text(
           '第 ${stage + 1} 次复习',
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.labelSmall
+              ?.copyWith(color: colorScheme.onSurfaceVariant),
         ),
       ],
     );

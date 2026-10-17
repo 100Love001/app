@@ -1,9 +1,9 @@
 import 'dart:async';
 
-import 'package:app/constants/finance_budgets.dart';
 import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/finance/finance_repository.dart';
+import 'package:app/utils/budget_period.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/time.dart';
@@ -29,11 +29,9 @@ class FinancePageState extends State<FinancePage> {
   // 积分明细查看的月份偏移：0=本月、1=上月…；null=全部流水。
   int? _pointMonthOffset = 0;
   List<Map<String, dynamic>> _categories = [];
-  final Map<String, double> _budgetLimits = {};
   int _points = 0;
   int _monthPointIncome = 0;
   int _monthPointExpense = 0;
-  double _foodSpentToday = 0;
 
   @override
   void initState() {
@@ -47,27 +45,13 @@ class FinancePageState extends State<FinancePage> {
 
   String _date(DateTime value) => TimeUtil.toDateKey(value);
 
-  Future<void> _settleExpiredFoodBudgets(DateTime now) async {
-    final today = DateTime(now.year, now.month, now.day);
-    // 饭钱改为用户每日自行记账，进入页面不再自动生成固定饭钱支出。
-    final rows = await FinanceRepository.instance.loadFoodExchangeLastDate();
-    final lastDate = DateTime.tryParse('${rows.first['last_date'] ?? ''}');
-    var date = lastDate == null
-        ? today.subtract(const Duration(days: 1))
-        : DateTime(
-            lastDate.year,
-            lastDate.month,
-            lastDate.day,
-          ).add(const Duration(days: 1));
-    while (date.isBefore(today)) {
-      // 单日结算失败（如脏预算数据）不能阻断财务页加载：跳过该日继续
-      // 结算后续日期。失败日没有兑换记录，下次进入时会自动重试。
-      try {
-        await PointsService.exchangeTodayFoodBalance(date);
-      } catch (_) {
-        //  deliberately ignored: 保持页面可用，等待下次启动重试
-      }
-      date = date.add(const Duration(days: 1));
+  /// 进入财务页时结算所有支出分类「已结束周期」的结余/超支积分。
+  /// 单分类失败不阻断页面加载（结算记录未写入，下次进入自动重试）。
+  Future<void> _settleExpiredBudgets(DateTime now) async {
+    try {
+      await PointsService.settleCategoryBudgets(now);
+    } catch (_) {
+      // deliberately ignored: 保持页面可用，等待下次启动重试
     }
   }
 
@@ -78,30 +62,25 @@ class FinancePageState extends State<FinancePage> {
     });
     try {
       final now = DateTime.now();
-      await _settleExpiredFoodBudgets(now);
-      final quarterStart = DateTime(now.year, ((now.month - 1) ~/ 3) * 3 + 1);
-      final nextQuarter = DateTime(
-        quarterStart.month == 10 ? now.year + 1 : now.year,
-        quarterStart.month == 10 ? 1 : quarterStart.month + 3,
-      );
-      final today = _date(now);
+      await _settleExpiredBudgets(now);
       final repo = FinanceRepository.instance;
-      final budgetKeys = FinanceBudgets.categories
-          .map((category) => category.settingKey)
-          .toList();
       final results = await Future.wait([
         repo.loadRecords(),
         repo.loadCategories(),
         repo.loadPointRecords(),
-        repo.loadBudgetLimits(budgetKeys),
       ]);
       final records = results[0];
       final categories = results[1];
       final pointRecords = results[2];
-      final budgetRows = results[3];
+      // 支出分类配置：卡片与统计只展示仍存在的分类；
+      // 分类被删除后历史账单保留文本名称，但不再出现在预算卡片区。
+      final configsByName = <String, Map<String, dynamic>>{
+        for (final category in categories)
+          if (category['type'] == '支出')
+            category['name'] as String: category,
+      };
       double income = 0;
       double expense = 0;
-      double foodSpentToday = 0;
       int totalPoints = 0;
       var monthPointIncome = 0;
       var monthPointExpense = 0;
@@ -112,18 +91,20 @@ class FinancePageState extends State<FinancePage> {
           income += amount;
         } else {
           expense += amount;
+          final config = configsByName[record['category']];
+          final periodType = config?['period_type'] as String?;
           final date = DateTime.tryParse('${record['record_date']}');
-          // 历史自动饭钱记录不参与“今日已花饭钱”统计。
-          if (record['category'] == '今日饭钱' &&
-              record['record_date'] == today &&
+          // 统计该分类「当前周期」已花金额；历史自动饭钱记录不参与统计。
+          if (config != null &&
+              periodType != null &&
+              BudgetPeriods.isSettled(periodType) &&
+              date != null &&
+              BudgetPeriods.startOf(periodType, date) ==
+                  BudgetPeriods.startOf(periodType, now) &&
               record['remark'] != '自动添加每日饭钱') {
-            foodSpentToday += amount;
-          }
-          if (date != null &&
-              !date.isBefore(quarterStart) &&
-              date.isBefore(nextQuarter)) {
             final category = record['category'] as String;
-            categoryTotals[category] = (categoryTotals[category] ?? 0) + amount;
+            categoryTotals[category] =
+                (categoryTotals[category] ?? 0) + amount;
           }
         }
       }
@@ -141,10 +122,6 @@ class FinancePageState extends State<FinancePage> {
           }
         }
       }
-      final budgetLimits = {
-        for (final row in budgetRows)
-          row['key'] as String: double.tryParse(row['value'] as String) ?? 0.0,
-      };
       if (!mounted) return;
       setState(() {
         _balance = income - expense;
@@ -158,10 +135,6 @@ class FinancePageState extends State<FinancePage> {
         _points = totalPoints;
         _monthPointIncome = monthPointIncome;
         _monthPointExpense = monthPointExpense;
-        _foodSpentToday = foodSpentToday;
-        _budgetLimits
-          ..clear()
-          ..addAll(budgetLimits);
         _loading = false;
       });
     } catch (error) {
@@ -714,7 +687,6 @@ class FinancePageState extends State<FinancePage> {
   }
 
   Widget _buildSummaryCard() {
-    final food = _foodSpentToday;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -731,39 +703,26 @@ class FinancePageState extends State<FinancePage> {
             LayoutBuilder(
               builder: (context, constraints) {
                 final itemWidth = (constraints.maxWidth - 12) / 2;
-                // 自定义支出分类（记账分类管理中添加）同步显示为预算卡片，
-                // 无额度限制，仅统计今季度支出。
-                final customExpenseNames = _categories
-                    .where(
-                      (item) =>
-                          item['type'] == '支出' &&
-                          toInt(item['is_system']) != 1,
-                    )
-                    .map((item) => item['name'] as String);
+                // 预算卡片完全由「我的-账单体系-记账分类管理」驱动：
+                // 每个支出分类一张卡，金额按其结算周期统计，额度取其配置预算。
+                final expenseCategories = _categories
+                    .where((item) => item['type'] == '支出')
+                    .toList();
                 return Wrap(
                   spacing: 12,
                   runSpacing: 14,
                   children: [
-                    for (final budget in FinanceBudgets.categories)
+                    for (final item in expenseCategories)
                       SizedBox(
                         width: itemWidth,
                         child: _BudgetItem(
-                          category: budget.category,
-                          period: budget.period,
-                          spent: budget.category == '今日饭钱'
-                              ? food
-                              : _categoryTotals[budget.category] ?? 0,
-                          limit: _budgetLimits[budget.settingKey] ?? 0,
-                        ),
-                      ),
-                    for (final name in customExpenseNames)
-                      SizedBox(
-                        width: itemWidth,
-                        child: _BudgetItem(
-                          category: name,
-                          period: '今季度',
-                          spent: _categoryTotals[name] ?? 0,
-                          limit: 0,
+                          category: item['name'] as String,
+                          period: BudgetPeriods.labelOf(
+                            item['period_type'] as String? ?? 'none',
+                          ),
+                          spent:
+                              _categoryTotals[item['name'] as String] ?? 0,
+                          limit: toDouble(item['budget']),
                         ),
                       ),
                   ],
