@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:app/constants/app_constants.dart';
-import 'package:app/routes/app_routes.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/home/home_repository.dart';
@@ -18,12 +17,24 @@ import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.onOpenTasks, this.onOpenHopes});
+  const HomePage({
+    super.key,
+    this.onOpenTasks,
+    this.onOpenHopes,
+    this.onOpenPoints,
+    this.onOpenAnniversaries,
+  });
 
   final VoidCallback? onOpenTasks;
 
   /// 跳转到任务页并定位到希望清单分区。
   final VoidCallback? onOpenHopes;
+
+  /// 跳转到财务页并定位到积分体系 tab。
+  final VoidCallback? onOpenPoints;
+
+  /// 跳转到记录页纪念日分区；参数表示是否进入后自动打开添加对话框。
+  final ValueChanged<bool>? onOpenAnniversaries;
 
   @override
   HomePageState createState() => HomePageState();
@@ -130,12 +141,6 @@ class HomePageState extends State<HomePage> {
     } catch (error) {
       _showMessage('开启失败：$error');
     }
-  }
-
-  void _openRoute(String route) {
-    Navigator.pushNamed(context, route).then((_) {
-      if (mounted) unawaited(vm.refreshData());
-    });
   }
 
   Future<void> refresh() async {
@@ -1013,19 +1018,10 @@ class HomePageState extends State<HomePage> {
                   child: InkWell(
                     key: const ValueKey('home-recent-anniversary'),
                     onTap: () {
-                if (nearestAnniversary == null) {
-                  // 没有进行中的纪念日时，从首页“添加纪念日”入口直接打开添加对话框。
-                  Navigator.pushNamed(
-                    context,
-                    AppRoutes.anniversaries,
-                    arguments: const {'autoAdd': true},
-                  ).then((_) {
-                    if (mounted) unawaited(vm.refreshData());
-                  });
-                } else {
-                  _openRoute(AppRoutes.anniversaries);
-                }
-              },
+                      // 无纪念日时进入后直接打开添加对话框，否则仅定位到纪念日分区。
+                      // 跳转到记录页的纪念日分区，与首页其他入口的直达闭环一致。
+                      widget.onOpenAnniversaries?.call(nearestAnniversary == null);
+                    },
                     borderRadius: BorderRadius.circular(10),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
@@ -1243,7 +1239,7 @@ class HomePageState extends State<HomePage> {
       clipBehavior: Clip.antiAlias,
       color: scheme.primaryContainer,
       child: InkWell(
-        onTap: widget.onOpenTasks,
+        onTap: widget.onOpenPoints,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
           child: Row(

@@ -1,5 +1,4 @@
 import 'package:app/main.dart';
-import 'package:app/pages/anniversaries/anniversaries_page.dart';
 import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/pages/main_page.dart';
 import 'package:app/pages/profile/appearance_settings_page.dart';
@@ -106,7 +105,9 @@ void main() {
     expect(find.text('今日心情'), findsNothing);
   });
 
-  testWidgets('home points card opens the tasks tab', (tester) async {
+  testWidgets('home points card opens the finance points tab', (
+    tester,
+  ) async {
     await tester.pumpWidget(const MyApp());
     await pumpFrames(tester);
     await tester.tap(find.byKey(const ValueKey('home-points-balance')));
@@ -114,8 +115,34 @@ void main() {
 
     expect(
       tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      1,
+    );
+    expect(find.text('积分体系'), findsOneWidget);
+  });
+
+  testWidgets('home today tasks card lands on the special tasks section', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const MyApp());
+    await pumpFrames(tester);
+    // 先把任务页切到希望清单，验证从首页点击今日任务卡会重定位，
+    // 而不是沿用上次停留的分区记忆。
+    await tester.tap(find.text('任务'));
+    await pumpFrames(tester);
+    await tester.ensureVisible(find.text('希望清单'));
+    await pumpFrames(tester);
+    await tester.tap(find.text('希望清单'));
+    await pumpFrames(tester);
+    await tester.tap(find.text('首页'));
+    await pumpFrames(tester);
+    await tester.tap(find.text('今天的任务'));
+    await pumpFrames(tester);
+
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
       2,
     );
+    expect(find.text('特殊任务'), findsOneWidget);
   });
 
   testWidgets('records no longer expose mood functionality', (tester) async {
@@ -221,7 +248,9 @@ void main() {
     expect(find.byType(QuoteReplyHistoryPage), findsOneWidget);
   });
 
-  testWidgets('home shows a tappable recent anniversary', (tester) async {
+  testWidgets('home anniversary entry lands on records anniversary tab', (
+    tester,
+  ) async {
     await tester.pumpWidget(const MyApp());
     await pumpFrames(tester);
     expect(
@@ -230,7 +259,16 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('home-recent-anniversary')));
     await pumpFrames(tester);
-    expect(find.byType(AnniversariesPage), findsOneWidget);
+
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      3,
+    );
+    // 直达记录页纪念日分区（内嵌 tab），而非 push 独立纪念日页。
+    final chip = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, '纪念日'),
+    );
+    expect(chip.selected, isTrue);
   });
 
   testWidgets('diary page remains available from records', (tester) async {
@@ -245,7 +283,9 @@ void main() {
     expect(find.text('待补充业务内容'), findsNothing);
   });
 
-  testWidgets('records contains an anniversary tab', (tester) async {
+  testWidgets('records anniversary tab renders the embedded view', (
+    tester,
+  ) async {
     await tester.pumpWidget(const MyApp());
     await tester.pump();
     await tester.tap(find.text('记录'));
@@ -253,7 +293,11 @@ void main() {
     await tester.tap(find.widgetWithText(ChoiceChip, '纪念日'));
     await pumpFrames(tester);
 
-    expect(find.byType(AnniversariesPage), findsOneWidget);
+    // 内嵌后点击不再 push 独立路由，而是切换记录页内的纪念日分区。
+    final chip = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, '纪念日'),
+    );
+    expect(chip.selected, isTrue);
   });
 
   testWidgets('wish and hope lists are available from tasks', (tester) async {

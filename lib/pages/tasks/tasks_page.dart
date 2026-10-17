@@ -103,6 +103,12 @@ class TasksPageState extends State<TasksPage> {
     setState(() => _section = _TaskSection.hopes);
   }
 
+  /// 供首页“今天的任务”卡片定位到今日任务所在的特殊任务分区，
+  /// 避免沿用上次停留分区的记忆导致目标错位。
+  void showToday() {
+    setState(() => _section = _TaskSection.special);
+  }
+
   Future<void> _loadTasks() async {
     setState(() {
       _loading = true;

@@ -44,6 +44,11 @@ class FinancePageState extends State<FinancePage> {
     if (!_loading) unawaited(_loadData());
   }
 
+  /// 供首页积分卡直达积分体系 tab。
+  void showPoints() {
+    setState(() => _tab = 1);
+  }
+
   String _date(DateTime value) => TimeUtil.toDateKey(value);
 
   /// 导出 CSV：账单或积分流水，生成后调起系统分享，
@@ -812,6 +817,22 @@ class FinancePageState extends State<FinancePage> {
       6,
       (index) => DateTime(now.year, now.month - 5 + index),
     );
+    // 近 6 个月均无收支时展示占位，避免渲染一张空白坐标图。
+    final hasTrendData = _records.any((record) {
+      final date = DateTime.tryParse('${record['record_date']}');
+      if (date == null) return false;
+      return months.any(
+        (month) => date.year == month.year && date.month == month.month,
+      );
+    });
+    if (!hasTrendData) {
+      return Card(
+        child: _EmptyState(
+          message: '近 6 个月暂无收支记录，点击右上角 + 记一笔吧',
+          icon: Icons.show_chart_rounded,
+        ),
+      );
+    }
     final groups = <BarChartGroupData>[];
     for (var index = 0; index < months.length; index++) {
       final month = months[index];
@@ -1035,7 +1056,9 @@ class FinancePageState extends State<FinancePage> {
                 Expanded(
                   child: _PointSummaryItem(
                     label: '本月支出',
-                    value: '-$_monthPointExpense',
+                    value: _monthPointExpense == 0
+                        ? '0'
+                        : '-$_monthPointExpense',
                     color: Colors.red,
                   ),
                 ),

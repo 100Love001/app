@@ -16,9 +16,24 @@ import 'package:app/utils/dialog.dart';
 import 'package:flutter/material.dart';
 
 class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key, this.onPersonalDataChanged});
+  const ProfilePage({
+    super.key,
+    this.onPersonalDataChanged,
+    this.onOpenPoints,
+    this.onOpenTasks,
+    this.onOpenFinance,
+  });
 
   final VoidCallback? onPersonalDataChanged;
+
+  /// 点击“积分余额”直达财务页积分体系。
+  final VoidCallback? onOpenPoints;
+
+  /// 点击“完成任务”直达任务页。
+  final VoidCallback? onOpenTasks;
+
+  /// 点击“记账笔数”直达财务页收支记账。
+  final VoidCallback? onOpenFinance;
 
   @override
   State<ProfilePage> createState() => ProfilePageState();
@@ -481,11 +496,26 @@ class ProfilePageState extends State<ProfilePage> {
                 height: 44,
                 child: Row(
                   children: [
-                    _statItem(context, '积分余额', _stats?.points),
+                    _statItem(
+                      context,
+                      '积分余额',
+                      _stats?.points,
+                      onTap: widget.onOpenPoints,
+                    ),
                     _statDivider(colorScheme),
-                    _statItem(context, '完成任务', _stats?.completedTasks),
+                    _statItem(
+                      context,
+                      '完成任务',
+                      _stats?.completedTasks,
+                      onTap: widget.onOpenTasks,
+                    ),
                     _statDivider(colorScheme),
-                    _statItem(context, '记账笔数', _stats?.bills),
+                    _statItem(
+                      context,
+                      '记账笔数',
+                      _stats?.bills,
+                      onTap: widget.onOpenFinance,
+                    ),
                   ],
                 ),
               ),
@@ -502,27 +532,39 @@ class ProfilePageState extends State<ProfilePage> {
     color: colorScheme.outlineVariant.withValues(alpha: 0.6),
   );
 
-  Widget _statItem(BuildContext context, String label, int? value) {
+  /// 页头统计项；[onTap] 不为 null 时可点击直达对应页面。
+  Widget _statItem(
+    BuildContext context,
+    String label,
+    int? value, {
+    VoidCallback? onTap,
+  }) {
     final colorScheme = Theme.of(context).colorScheme;
+    final content = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          value == null ? '--' : '$value',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+    if (onTap == null) return Expanded(child: content);
     return Expanded(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            value == null ? '--' : '$value',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Center(child: content),
       ),
     );
   }

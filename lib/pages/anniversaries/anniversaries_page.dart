@@ -7,14 +7,24 @@ import 'package:app/utils/time.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-class AnniversariesPage extends StatefulWidget {
-  const AnniversariesPage({super.key});
+/// 纪念日列表视图：可内嵌到记录页纪念日分区，也可由独立页包装。
+/// [autoAdd] 为 true 时进入后自动打开添加对话框，消费后回调
+/// [onAutoAddConsumed] 通知宿主复位标记。
+class AnniversariesView extends StatefulWidget {
+  const AnniversariesView({
+    super.key,
+    this.autoAdd = false,
+    this.onAutoAddConsumed,
+  });
+
+  final bool autoAdd;
+  final VoidCallback? onAutoAddConsumed;
 
   @override
-  State<AnniversariesPage> createState() => _AnniversariesPageState();
+  State<AnniversariesView> createState() => _AnniversariesViewState();
 }
 
-class _AnniversariesPageState extends State<AnniversariesPage> {
+class _AnniversariesViewState extends State<AnniversariesView> {
   List<Map<String, Object?>> _anniversaries = [];
   bool _loading = true;
   Object? _error;
@@ -27,12 +37,15 @@ class _AnniversariesPageState extends State<AnniversariesPage> {
     // 从首页“添加纪念日”入口进入时（autoAdd），直接打开添加对话框。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final args = ModalRoute.of(context)?.settings.arguments;
-      if (args is Map && args['autoAdd'] == true) {
+      if (widget.autoAdd) {
+        widget.onAutoAddConsumed?.call();
         unawaited(_editAnniversary());
       }
     });
   }
+
+  /// 供宿主（记录页/独立包装页）刷新纪念日数据。
+  void refresh() => unawaited(_loadAnniversaries());
 
   Future<void> _loadAnniversaries() async {
     setState(() {
@@ -340,41 +353,38 @@ class _AnniversariesPageState extends State<AnniversariesPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('纪念日'),
-        actions: [
-          IconButton(
-            tooltip: '刷新',
-            onPressed: _loading ? null : _loadAnniversaries,
-            icon: const Icon(Icons.refresh),
+    return Stack(
+      children: [
+        if (_loading)
+          const Center(child: CircularProgressIndicator())
+        else if (_error != null)
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('纪念日加载失败：$_error'),
+                const SizedBox(height: 8),
+                FilledButton(
+                  onPressed: _loadAnniversaries,
+                  child: const Text('重试'),
+                ),
+              ],
+            ),
+          )
+        else if (_anniversaries.isEmpty)
+          _buildEmptyState(context)
+        else
+          _buildAnniversaryList(context),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: FloatingActionButton.extended(
+            onPressed: _loading ? null : () => _editAnniversary(),
+            icon: const Icon(Icons.add),
+            label: const Text('添加纪念日'),
           ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('纪念日加载失败：$_error'),
-                  const SizedBox(height: 8),
-                  FilledButton(
-                    onPressed: _loadAnniversaries,
-                    child: const Text('重试'),
-                  ),
-                ],
-              ),
-            )
-          : _anniversaries.isEmpty
-          ? _buildEmptyState(context)
-          : _buildAnniversaryList(context),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _loading ? null : () => _editAnniversary(),
-        icon: const Icon(Icons.add),
-        label: const Text('添加纪念日'),
-      ),
+        ),
+      ],
     );
   }
 

@@ -60,10 +60,21 @@ class MainPageState extends State<MainPage> {
         children: [
           HomePage(
             key: _homeKey,
-            onOpenTasks: () => _selectTab(2),
+            onOpenTasks: () {
+              _selectTab(2);
+              _tasksKey.currentState?.showToday();
+            },
             onOpenHopes: () {
               _selectTab(2);
               _tasksKey.currentState?.showHopes();
+            },
+            onOpenPoints: () {
+              _selectTab(1);
+              _financeKey.currentState?.showPoints();
+            },
+            onOpenAnniversaries: (autoAdd) {
+              _selectTab(3);
+              _recordsKey.currentState?.showAnniversaries(autoAdd: autoAdd);
             },
           ),
           FinancePage(key: _financeKey),
@@ -72,6 +83,15 @@ class MainPageState extends State<MainPage> {
           ProfilePage(
             key: _profileKey,
             onPersonalDataChanged: _refreshAllPages,
+            onOpenPoints: () {
+              _selectTab(1);
+              _financeKey.currentState?.showPoints();
+            },
+            onOpenTasks: () {
+              _selectTab(2);
+              _tasksKey.currentState?.showToday();
+            },
+            onOpenFinance: () => _selectTab(1),
           ),
         ],
       ),
@@ -102,6 +122,12 @@ class MainPageState extends State<MainPage> {
 
   /// 供通知跳转等外部入口切换 Tab（会顺带刷新目标页数据）。
   void selectTab(int index) => _selectTab(index);
+
+  /// 供通知等外部入口直达记录页的纪念日分区。
+  void openAnniversaries({bool autoAdd = false}) {
+    _selectTab(3);
+    _recordsKey.currentState?.showAnniversaries(autoAdd: autoAdd);
+  }
 
   /// 恢复备份 / 清空数据后刷新所有常驻 Tab，丢弃恢复前的内存数据。
   void _refreshAllPages() {

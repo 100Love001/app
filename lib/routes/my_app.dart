@@ -11,7 +11,6 @@ import '../pages/main_page.dart';
 import '../pages/search/search_page.dart';
 import '../pages/records/records_page.dart';
 import '../pages/profile/tag_management_page.dart';
-import '../pages/anniversaries/anniversaries_page.dart';
 import 'app_routes.dart';
 import 'placeholder_page.dart';
 
@@ -64,7 +63,7 @@ class _MyAppState extends State<MyApp> {
   }
 
   /// 通知点击路由：tasks → 任务页，finance → 财务页，
-  /// anniversaries → 纪念日页，home → 首页（每日小结）。
+  /// anniversaries → 记录页纪念日分区，home → 首页（每日小结）。
   /// 常驻通知的 payload 可能带任务上下文（tasks|id|kind），仅取首段路由。
   void _handleNotificationPayload(String payload) {
     final navigator = _navigatorKey.currentState;
@@ -85,7 +84,7 @@ class _MyAppState extends State<MyApp> {
         _mainPageKey.currentState?.selectTab(3);
       case 'anniversaries':
         navigator.popUntil((route) => route.isFirst);
-        navigator.pushNamed(AppRoutes.anniversaries);
+        _mainPageKey.currentState?.openAnniversaries();
     }
   }
 
@@ -127,7 +126,6 @@ class _MyAppState extends State<MyApp> {
           AppRoutes.records: (context) => const RecordsPage(),
           AppRoutes.search: (context) => const SearchPage(),
           AppRoutes.tags: (context) => const TagManagementPage(),
-          AppRoutes.anniversaries: (context) => const AnniversariesPage(),
           AppRoutes.diary: (context) => const RecordsPage(openDiaries: true),
         },
         onUnknownRoute: (settings) => MaterialPageRoute<void>(

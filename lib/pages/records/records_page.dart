@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:app/constants/app_constants.dart';
+import 'package:app/pages/anniversaries/anniversaries_page.dart';
 import 'package:app/pages/records/diary_editor_page.dart';
 import 'package:app/pages/records/diary_folder_management_page.dart';
-import 'package:app/routes/app_routes.dart';
 import 'package:app/stores/collections/collection_repository.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
@@ -53,6 +53,8 @@ class RecordsPageState extends State<RecordsPage> {
   final PageController _carouselController = PageController();
   List<Map<String, dynamic>>? _inProgressWishesCache;
   List<Map<String, dynamic>>? _inProgressHopesCache;
+  // 纪念日分区进入后是否自动打开添加对话框（一次性，由视图消费后复位）。
+  bool _anniversariesAutoAdd = false;
 
   static String _bookName(String bookType) =>
       bookType == 'diary' ? '日记本' : '认知本';
@@ -188,6 +190,16 @@ class RecordsPageState extends State<RecordsPage> {
       _carouselController.jumpToPage(0);
     }
     _configureCarouselTimer();
+  }
+
+  /// 供首页纪念日入口/通知直达纪念日分区；
+  /// [autoAdd] 为 true 时进入后自动打开添加对话框。
+  void showAnniversaries({bool autoAdd = false}) {
+    setState(() {
+      _tab = _RecordTab.anniversaries;
+      _carouselIndex = 0;
+      _anniversariesAutoAdd = autoAdd;
+    });
   }
 
   void refresh() => unawaited(_loadData());
@@ -1371,19 +1383,6 @@ class RecordsPageState extends State<RecordsPage> {
                         _tab = entry.$1;
                         _carouselIndex = 0;
                       });
-                      if (entry.$1 == _RecordTab.anniversaries) {
-                        unawaited(
-                          Navigator.pushNamed<void>(
-                            context,
-                            AppRoutes.anniversaries,
-                          ).then((_) {
-                            if (mounted) {
-                              setState(() => _tab = _RecordTab.problems);
-                            }
-                          }),
-                        );
-                        return;
-                      }
                       if (_carouselController.hasClients) {
                         _carouselController.jumpToPage(0);
                       }
@@ -1396,6 +1395,16 @@ class RecordsPageState extends State<RecordsPage> {
   );
 
   Widget _buildBody() {
+    if (_tab == _RecordTab.anniversaries) {
+      return AnniversariesView(
+        // autoAdd 变化时换 key 重建，保证重复直达也能再次触发添加对话框。
+        key: ValueKey('anniversaries-view-$_anniversariesAutoAdd'),
+        autoAdd: _anniversariesAutoAdd,
+        onAutoAddConsumed: () {
+          if (mounted) setState(() => _anniversariesAutoAdd = false);
+        },
+      );
+    }
     if (_tab == _RecordTab.cognition) return _buildDiaries('cognition');
     if (_tab == _RecordTab.diary) return _buildDiaries('diary');
     if (_tab == _RecordTab.problems) return _buildProblems();
