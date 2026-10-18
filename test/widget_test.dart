@@ -4,6 +4,7 @@ import 'package:app/main.dart';
 import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/pages/main_page.dart';
 import 'package:app/pages/profile/appearance_settings_page.dart';
+import 'package:app/pages/profile/app_color_picker.dart';
 import 'package:app/pages/profile/billing_system_page.dart';
 import 'package:app/pages/profile/budget_management_page.dart';
 import 'package:app/pages/profile/points_rate_management_page.dart';
@@ -37,6 +38,23 @@ Future<void> tapProfileTile(WidgetTester tester, String title) async {
   await tester.pump(const Duration(milliseconds: 300));
   await tester.tap(find.text(title));
   await tester.pump();
+  await pumpFrames(tester);
+}
+
+/// 外观页各区块默认折叠：滚动到标题处点击展开，等待动画完成。
+Future<void> expandAppearanceSection(WidgetTester tester, String title) async {
+  final scrollable = find.descendant(
+    of: find.byType(AppearanceSettingsPage),
+    matching: find.byType(Scrollable),
+  );
+  await tester.scrollUntilVisible(
+    find.text(title),
+    200,
+    scrollable: scrollable.first,
+  );
+  await tester.ensureVisible(find.text(title));
+  await tester.pump(const Duration(milliseconds: 300));
+  await tester.tap(find.text(title));
   await pumpFrames(tester);
 }
 
@@ -251,27 +269,93 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
+    // 区块默认全部折叠，仅标题与当前值摘要可见。
+    expect(find.text('显示模式'), findsOneWidget);
     expect(find.text('主题颜色'), findsOneWidget);
+    expect(find.text('背景颜色'), findsOneWidget);
+    expect(find.text('字体颜色'), findsOneWidget);
+    expect(find.text('樱花粉'), findsNothing);
+
+    await expandAppearanceSection(tester, '显示模式');
+    expect(find.text('深色'), findsOneWidget);
+
+    await expandAppearanceSection(tester, '主题颜色');
     expect(find.text('樱花粉'), findsOneWidget);
     expect(find.text('石墨灰'), findsOneWidget);
-    expect(find.text('深色'), findsOneWidget);
+    expect(find.text('自定义'), findsOneWidget);
+
+    await expandAppearanceSection(tester, '背景颜色');
+    expect(find.text('雾白'), findsWidgets);
+
+    await expandAppearanceSection(tester, '字体颜色');
+    expect(find.text('墨黑'), findsOneWidget);
+    expect(find.text('默认'), findsWidgets);
+
+    await expandAppearanceSection(tester, '样式套餐');
+    expect(find.text('直角卡片 · 方正按键'), findsOneWidget);
+    expect(find.text('大圆角卡片 · 轻微阴影'), findsOneWidget);
+
+    await expandAppearanceSection(tester, '卡片样式');
+    expect(find.text('无阴影'), findsOneWidget);
+
     final appearanceScroll = find.descendant(
       of: find.byType(AppearanceSettingsPage),
       matching: find.byType(Scrollable),
     );
     await tester.scrollUntilVisible(
-      find.text('字体大小'),
-      300,
-      scrollable: appearanceScroll.first,
-    );
-    expect(find.text('卡片样式'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('背景颜色'),
+      find.text('弹窗样式'),
       300,
       scrollable: appearanceScroll.first,
     );
     expect(find.text('按键样式'), findsOneWidget);
-    expect(find.text('背景颜色'), findsOneWidget);
+    expect(find.text('输入框样式'), findsOneWidget);
+    expect(find.text('弹窗样式'), findsOneWidget);
+  });
+
+  testWidgets('app color picker returns the tapped recommended color', (
+    tester,
+  ) async {
+    Color? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await AppColorPicker.show(
+                  context,
+                  title: '测试选色',
+                  recommended: const [Colors.red, Colors.blue],
+                );
+              },
+              child: const Text('打开色盘'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开色盘'));
+    await pumpFrames(tester);
+
+    expect(find.text('测试选色'), findsOneWidget);
+    // 推荐色块以 InkWell 呈现（确定/取消按钮在色盘 widget 之外）。
+    final swatches = find.descendant(
+      of: find.byType(AppColorPicker),
+      matching: find.byType(InkWell),
+    );
+    expect(swatches, findsNWidgets(2));
+
+    await tester.tap(swatches.first);
+    await pumpFrames(tester);
+    await tester.tap(find.text('确定'));
+    await pumpFrames(tester);
+
+    expect(result, isNotNull);
+    expect(
+      HSVColor.fromColor(result!).hue,
+      moreOrLessEquals(HSVColor.fromColor(Colors.red).hue, epsilon: 1),
+    );
+    expect(find.text('测试选色'), findsNothing);
   });
 
   testWidgets('profile exposes finance management entries', (tester) async {

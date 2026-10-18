@@ -221,6 +221,94 @@ void main() {
     );
   });
 
+  test('style presets are consistent and within valid ranges', () {
+    // 名称表与值表键集合一致。
+    expect(
+      AppSettingsController.stylePresetNames.keys.toSet(),
+      AppSettingsController.stylePresetValues.keys.toSet(),
+    );
+    for (final entry in AppSettingsController.stylePresetValues.entries) {
+      final values = entry.value;
+      // 每套套餐覆盖 卡片圆角/卡片阴影/按键/输入框/弹窗 五个维度。
+      expect(values.length, 5);
+      expect(values[0], inInclusiveRange(0, AppSettingsController.cardRadii.length - 1));
+      expect(values[1], inInclusiveRange(0, AppSettingsController.cardElevations.length - 1));
+      expect(values[2], inInclusiveRange(0, AppSettingsController.buttonRadii.length - 1));
+      expect(values[3], inInclusiveRange(0, AppSettingsController.inputRadii.length - 1));
+      expect(values[4], inInclusiveRange(0, AppSettingsController.dialogRadii.length - 1));
+    }
+    // 标准套餐即历史默认搭配。
+    expect(AppSettingsController.stylePresetValues['standard'], [1, 0, 1, 1, 1]);
+  });
+
+  test('background value parser supports preset index and custom color', () {
+    // 旧版索引值兼容。
+    final preset = AppSettingsController.parseBackgroundValue('2');
+    expect(preset.index, 2);
+    expect(preset.custom, isNull);
+
+    // 自定义色：'c<argb>' 格式。
+    const color = Color(0xFFFFF3E0);
+    final custom = AppSettingsController.parseBackgroundValue(
+      'c${color.toARGB32()}',
+    );
+    expect(custom.custom?.toARGB32(), color.toARGB32());
+
+    // 无效值回退默认预设。
+    final invalid = AppSettingsController.parseBackgroundValue('abc');
+    expect(invalid.index, 0);
+    expect(invalid.custom, isNull);
+    final outOfRange = AppSettingsController.parseBackgroundValue('99');
+    expect(outOfRange.index, 0);
+  });
+
+  test('custom color parser round-trips argb values and rejects others', () {
+    // 'c<argb>' 往返解析。
+    const color = Color(0xFFE05D78);
+    final parsed = AppSettingsController.parseCustomColorValue(
+      'c${color.toARGB32()}',
+    );
+    expect(parsed?.toARGB32(), color.toARGB32());
+
+    // 带透明度的颜色同样往返。
+    const translucent = Color(0x802E5540);
+    final parsedAlpha = AppSettingsController.parseCustomColorValue(
+      'c${translucent.toARGB32()}',
+    );
+    expect(parsedAlpha?.toARGB32(), translucent.toARGB32());
+
+    // 索引值、空串、非法文本均返回 null。
+    expect(AppSettingsController.parseCustomColorValue('3'), isNull);
+    expect(AppSettingsController.parseCustomColorValue(''), isNull);
+    expect(AppSettingsController.parseCustomColorValue('null'), isNull);
+    expect(AppSettingsController.parseCustomColorValue('cabc'), isNull);
+  });
+
+  test('font recommended colors have matching names', () {
+    expect(
+      AppSettingsController.fontRecommendedNames.length,
+      AppSettingsController.fontRecommended.length,
+    );
+  });
+
+  test('font color and translucent background produce valid themes', () {
+    final light = AppTheme.lightThemeFor(
+      AppThemeColors.defaultSeed,
+      fontColor: const Color(0xFF1A3A6B),
+      backgroundColor: const Color(0x80FFF3E0),
+    );
+    expect(light.textTheme.bodyMedium?.color, const Color(0xFF1A3A6B));
+    // 半透明背景合成实色后 alpha 必为 1。
+    expect(light.scaffoldBackgroundColor.a, 1.0);
+
+    final dark = AppTheme.darkThemeFor(
+      AppThemeColors.defaultSeed,
+      fontColor: const Color(0x802E5540),
+    );
+    expect(dark.textTheme.bodyMedium?.color, const Color(0x802E5540));
+    expect(dark.scaffoldBackgroundColor.a, 1.0);
+  });
+
   test('all supported text scales create valid light and dark themes', () {
     for (final scale in AppSettingsController.fontScales) {
       final light = AppTheme.lightThemeFor(

@@ -35,7 +35,9 @@ class AppDatabase {
       onConfigure: (db) async {
         // WAL 模式：读写互不阻塞，崩溃后恢复快，
         // 避免残留事务回滚导致启动时长时间等锁。
-        await db.execute('PRAGMA journal_mode = WAL');
+        // 该 PRAGMA 会返回结果行，必须用 rawQuery（execute 底层是
+        // SQLiteStatement，不允许返回值，会抛 DatabaseException code 0）。
+        await db.rawQuery('PRAGMA journal_mode = WAL');
         // 开启外键约束
         await db.execute('PRAGMA foreign_keys = ON');
       },

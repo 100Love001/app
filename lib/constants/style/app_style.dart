@@ -5,30 +5,46 @@ class AppTheme {
     Color seedColor, {
     double fontScale = 1,
     double cardRadius = 20,
+    double cardElevation = 0,
     double buttonRadius = 16,
+    double inputRadius = 14,
+    double dialogRadius = 20,
     Color backgroundColor = const Color(0xFFF7F8FC),
+    Color? fontColor,
   }) => _createTheme(
     seedColor,
     Brightness.light,
     fontScale: fontScale,
     cardRadius: cardRadius,
+    cardElevation: cardElevation,
     buttonRadius: buttonRadius,
+    inputRadius: inputRadius,
+    dialogRadius: dialogRadius,
     backgroundColor: backgroundColor,
+    fontColor: fontColor,
   );
 
   static ThemeData darkThemeFor(
     Color seedColor, {
     double fontScale = 1,
     double cardRadius = 20,
+    double cardElevation = 0,
     double buttonRadius = 16,
+    double inputRadius = 14,
+    double dialogRadius = 20,
     Color backgroundColor = const Color(0xFF111318),
+    Color? fontColor,
   }) => _createTheme(
     seedColor,
     Brightness.dark,
     fontScale: fontScale,
     cardRadius: cardRadius,
+    cardElevation: cardElevation,
     buttonRadius: buttonRadius,
+    inputRadius: inputRadius,
+    dialogRadius: dialogRadius,
     backgroundColor: backgroundColor,
+    fontColor: fontColor,
   );
 
   static final ThemeData lightTheme = lightThemeFor(AppThemeColors.defaultSeed);
@@ -40,32 +56,47 @@ class AppTheme {
     Brightness brightness, {
     required double fontScale,
     required double cardRadius,
+    required double cardElevation,
     required double buttonRadius,
+    required double inputRadius,
+    required double dialogRadius,
     required Color backgroundColor,
+    required Color? fontColor,
   }) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: seedColor,
       brightness: brightness,
     );
+    // 半透明背景色会与下层底色混合发浑，先按亮度合成实色再使用。
+    final bg = backgroundColor.a >= 1
+        ? backgroundColor
+        : Color.alphaBlend(
+            backgroundColor,
+            brightness == Brightness.light ? Colors.white : Colors.black,
+          );
+    final textColor = fontColor ?? colorScheme.onSurface;
     final baseTextTheme = Typography.material2021().black.apply(
-      bodyColor: colorScheme.onSurface,
-      displayColor: colorScheme.onSurface,
+      bodyColor: textColor,
+      displayColor: textColor,
     );
     return ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: brightness == Brightness.light
-          ? backgroundColor
-          : Color.lerp(backgroundColor, const Color(0xFF111318), 0.94),
+          ? bg
+          : Color.lerp(bg, const Color(0xFF111318), 0.94),
       textTheme: _scaleTextTheme(baseTextTheme, fontScale),
       appBarTheme: AppBarTheme(
         backgroundColor: brightness == Brightness.light
-            ? backgroundColor
-            : Color.lerp(backgroundColor, const Color(0xFF111318), 0.94),
+            ? bg
+            : Color.lerp(bg, const Color(0xFF111318), 0.94),
         surfaceTintColor: Colors.transparent,
       ),
       cardTheme: CardThemeData(
-        elevation: 0,
+        elevation: cardElevation,
+        shadowColor: brightness == Brightness.light
+            ? colorScheme.shadow.withValues(alpha: 0.25)
+            : Colors.black54,
         color: brightness == Brightness.light
             ? Colors.white
             : const Color(0xFF1B1D23),
@@ -89,16 +120,28 @@ class AppTheme {
           vertical: 14,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(inputRadius),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(inputRadius),
           borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(inputRadius),
           borderSide: BorderSide(color: colorScheme.primary, width: 1.5),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(dialogRadius),
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(dialogRadius),
+          ),
         ),
       ),
       dividerTheme: DividerThemeData(
