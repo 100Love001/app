@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app/pages/finance/finance_category_management_page.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/finance/finance_repository.dart';
+import 'package:app/stores/settings/app_settings_controller.dart';
 import 'package:app/utils/budget_period.dart';
 import 'package:app/utils/csv_exporter.dart';
 import 'package:app/utils/dialog.dart';
@@ -784,7 +785,9 @@ class FinancePageState extends State<FinancePage> {
           end: Alignment.bottomRight,
           colors: [scheme.primary, scheme.tertiary],
         ),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(
+          AppSettingsController.instance.cardRadius,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1190,8 +1193,10 @@ class FinancePageState extends State<FinancePage> {
     );
   }
 
-  /// 积分英雄卡：琥珀渐变 + 大数字，对标主流积分账户头部。
+  /// 积分英雄卡：主色渐变 + 大数字，与总资金卡同款外观，
+  /// 颜色跟随「我的-外观配置」的主题色联动。
   Widget _buildPointsHeroCard() {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
@@ -1199,25 +1204,32 @@ class FinancePageState extends State<FinancePage> {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Colors.amber.shade700, Colors.deepOrange.shade400],
+          colors: [scheme.primary, scheme.tertiary],
         ),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(
+          AppSettingsController.instance.cardRadius,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.stars_rounded, size: 18, color: Colors.white),
-              SizedBox(width: 6),
-              Text('当前积分', style: TextStyle(color: Colors.white)),
+              Icon(Icons.stars_rounded, size: 18, color: scheme.onPrimary),
+              const SizedBox(width: 6),
+              Text(
+                '当前积分',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: scheme.onPrimary.withValues(alpha: 0.9),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
           Text(
             '$_points',
             style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-              color: Colors.white,
+              color: scheme.onPrimary,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.5,
             ),
@@ -1226,7 +1238,7 @@ class FinancePageState extends State<FinancePage> {
           Text(
             '完成任务获得积分，支出可抵扣',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Colors.white.withValues(alpha: 0.8),
+              color: scheme.onPrimary.withValues(alpha: 0.8),
             ),
           ),
         ],

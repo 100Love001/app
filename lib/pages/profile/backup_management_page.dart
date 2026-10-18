@@ -96,7 +96,8 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              '备份为单个加密文件，可保存到手机或直接分享。'
+              '备份打包为单个加密文件（含图片/语音附件），可保存到手机或直接分享，'
+              '在任意手机上凭密码恢复。'
               '密码无法找回，请妥善记忆；更换手机或重装应用后，'
               '需要凭此密码恢复备份。',
             ),
@@ -220,7 +221,7 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
       // 后缀校验在 importBackupFile 内完成，选错时会给出明确提示。
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
-        dialogTitle: '选择备份文件（.enc）',
+        dialogTitle: '选择备份文件（.lifebook / .enc）',
       );
       final files = result?.files;
       picked = (files == null || files.isEmpty) ? null : files.first;
@@ -253,16 +254,13 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
   }
 
   Future<void> _restoreBackup(LocalBackupInfo backup) async {
-    final encPath = backup.dataFileName;
-    if (encPath.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('备份数据文件缺失')),
-      );
-      return;
-    }
     setState(() => _busy = true);
+    String? restoreTempDir;
     try {
-      final bytes = await File(encPath).readAsBytes();
+      // v5 包在此时解包（data.enc + 附件）；.enc 直接读取字节。
+      final prepared = await _backupService.prepareRestore(backup);
+      restoreTempDir = prepared.tempDir;
+      final bytes = prepared.dataBytes;
       String? passphrase;
       final dbBackupService = DatabaseBackupService.instance;
 
@@ -307,9 +305,13 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
           title: const Text('恢复数据备份？'),
-          content: const Text(
-            '恢复会完整替换此设备上的记录、标签、预算和设置。'
-            '开始前会自动将当前数据库另存为回滚备份。',
+          content: Text(
+            backup.isBundle
+                ? '恢复会完整替换此设备上的记录、标签、预算和设置，'
+                    '并同步备份包内的图片/语音附件。'
+                    '开始前会自动将当前数据库另存为回滚备份。'
+                : '恢复会完整替换此设备上的记录、标签、预算和设置。'
+                    '开始前会自动将当前数据库另存为回滚备份。',
           ),
           actions: [
             TextButton(
@@ -333,6 +335,13 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
         bytes,
         passphrase: passphrase,
       );
+      // 数据库恢复成功后，同步备份包内的附件到本机并重写路径。
+      var attachmentCount = 0;
+      if (prepared.attachmentsDir != null) {
+        attachmentCount = await _backupService.restoreAttachments(
+          prepared.attachmentsDir!,
+        );
+      }
       _backupService.clearCachedInstallationId();
       await _settings.reload();
       widget.onPersonalDataChanged?.call();
@@ -341,7 +350,10 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
           SnackBar(
             duration: const Duration(seconds: 8),
             content: Text(
-              '恢复完成，共导入 ${result.restoredRowCount} 条记录',
+              attachmentCount > 0
+                  ? '恢复完成，共导入 ${result.restoredRowCount} 条记录、'
+                      '$attachmentCount 个附件'
+                  : '恢复完成，共导入 ${result.restoredRowCount} 条记录',
             ),
           ),
         );
@@ -361,6 +373,11 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
             .showSnackBar(SnackBar(content: Text('恢复备份失败：$error')));
       }
     } finally {
+      // 无论取消、密码错误、失败还是成功，都清理 .lifebook 解包临时目录
+      //（附件已在此前复制进本机目录，此处删除不影响恢复结果）。
+      try {
+        await _backupService.cleanupRestoreTemp(restoreTempDir);
+      } catch (_) {}
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -555,29 +572,35 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
   }
 
   Widget _buildActionCards(BuildContext context) {
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.add_a_photo_outlined,
-            title: '创建备份',
-            subtitle: '生成单个加密文件',
-            color: Theme.of(context).colorScheme.primary,
-            enabled: !_busy,
-            onTap: _exportBackup,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _ActionButton(
+                icon: Icons.add_a_photo_outlined,
+                title: '创建备份',
+                subtitle: '数据+附件 加密打包',
+                color: Theme.of(context).colorScheme.primary,
+                enabled: !_busy,
+                onTap: _exportBackup,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _ActionButton(
+                icon: Icons.file_open_outlined,
+                title: '导入备份文件',
+                subtitle: '.lifebook / .enc 恢复',
+                color: Theme.of(context).colorScheme.tertiary,
+                enabled: !_busy,
+                onTap: _importFromFile,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.file_open_outlined,
-            title: '导入备份文件',
-            subtitle: '选中 .enc 文件并恢复',
-            color: Theme.of(context).colorScheme.tertiary,
-            enabled: !_busy,
-            onTap: _importFromFile,
-          ),
-        ),
+        const SizedBox(height: 12),
+        _AutoPassphraseCard(busy: _busy),
       ],
     );
   }
@@ -713,6 +736,156 @@ class _BackupManagementPageState extends State<BackupManagementPage> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AutoPassphraseCard extends StatefulWidget {
+  const _AutoPassphraseCard({required this.busy});
+
+  final bool busy;
+
+  @override
+  State<_AutoPassphraseCard> createState() => _AutoPassphraseCardState();
+}
+
+class _AutoPassphraseCardState extends State<_AutoPassphraseCard> {
+  final LocalBackupService _service = LocalBackupService.instance;
+  bool _loading = true;
+  bool _hasPassphrase = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final passphrase = await _service.getAutoBackupPassphrase();
+    if (!mounted) return;
+    setState(() {
+      _hasPassphrase = passphrase != null && passphrase.isNotEmpty;
+      _loading = false;
+    });
+  }
+
+  Future<void> _editPassphrase() async {
+    final controller = TextEditingController();
+    final confirmController = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        // 校验失败时保持弹窗不关闭，避免误触清除密码。
+        void submit() {
+          final password = controller.text;
+          if (password.length < 6) {
+            ScaffoldMessenger.of(dialogContext)
+              ..clearSnackBars()
+              ..showSnackBar(const SnackBar(content: Text('密码至少需要 6 位')));
+            return;
+          }
+          if (password != confirmController.text) {
+            ScaffoldMessenger.of(dialogContext)
+              ..clearSnackBars()
+              ..showSnackBar(const SnackBar(content: Text('两次输入的密码不一致')));
+            return;
+          }
+          Navigator.pop(dialogContext, true);
+        }
+
+        return AlertDialog(
+          title: Text(_hasPassphrase ? '修改自动备份密码' : '设置自动备份密码'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '设置后，每年的自动备份将以此密码加密打包（含附件），'
+                '可在任意手机上恢复。密码不会随备份导出，请自行牢记。',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                obscureText: true,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: '自动备份密码（至少 6 位）'),
+              ),
+              TextField(
+                controller: confirmController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: '确认密码'),
+                onSubmitted: (_) => submit(),
+              ),
+            ],
+          ),
+          actions: [
+            if (_hasPassphrase)
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('清除密码'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: submit,
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+    // 对话框退场动画期间输入框仍挂在树上，延迟一帧再释放。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+      confirmController.dispose();
+    });
+    if (saved == null) return;
+    if (!saved) {
+      // 清除密码
+      await _service.setAutoBackupPassphrase(null);
+    } else {
+      await _service.setAutoBackupPassphrase(controller.text);
+    }
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(saved ? '已保存自动备份密码' : '已清除自动备份密码，自动备份仅本机可恢复')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: ListTile(
+        onTap: widget.busy ? null : _editPassphrase,
+        leading: Icon(
+          Icons.password_outlined,
+          color: colorScheme.secondary,
+        ),
+        title: const Text('自动备份密码'),
+        subtitle: Text(
+          _loading
+              ? '加载中…'
+              : _hasPassphrase
+              ? '已设置：自动备份为加密包，任意手机凭密码可恢复'
+              : '未设置：自动备份仅本机可恢复，点击设置',
+        ),
+        trailing: Icon(
+          _hasPassphrase ? Icons.lock_outline : Icons.lock_open_outlined,
+          color: _hasPassphrase ? colorScheme.primary : colorScheme.onSurfaceVariant,
         ),
       ),
     );

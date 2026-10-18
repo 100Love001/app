@@ -12,8 +12,8 @@ import 'package:app/stores/tasks/task_component_repository.dart';
 import 'package:app/stores/tasks/task_repository.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
-import 'package:app/utils/repeat_rule.dart';
 import 'package:app/utils/task_component.dart';
+import 'package:app/utils/task_status.dart';
 import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
 
@@ -53,7 +53,6 @@ class HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> _todayTasks = [];
   WeightRecord? _latestWeight;
   MoodRecord? _latestMood;
-  List<MoodCategory>? _moodCategories;
 
   @override
   void initState() {
@@ -384,57 +383,25 @@ class HomePageState extends State<HomePage> {
         TaskRepository.instance.loadSpecialTasks(),
         TaskRepository.instance.loadDailyTasks(),
         TaskRepository.instance.loadLongTermTasks(),
-        // 快捷记录目标：优先最新记录所属任务，无记录时回退最近带组件任务。
-        TaskComponentRepository.instance.latestWeightTarget(),
-        TaskComponentRepository.instance.latestMoodTarget(),
+        // 快捷记录最新值：体重 / 心情为应用级全局数据，与任务无关。
+        TaskComponentRepository.instance.latestWeight(),
+        TaskComponentRepository.instance.latestMood(),
       ]);
-      final today = DateTime.now();
-      final todayStart = DateTime(today.year, today.month, today.day);
-      bool isToday(Object? value) {
-        final date = DateTime.tryParse('$value');
-        return date != null &&
-            date.year == today.year &&
-            date.month == today.month &&
-            date.day == today.day;
-      }
-
       final specialTasks = (result[1] as List<Map<String, dynamic>>)
-          .where((task) {
-            if (task['status_tag'] != '进行中') return false;
-            final start = DateTime.tryParse('${task['start_time']}');
-            final end = DateTime.tryParse('${task['end_time']}');
-            return start != null &&
-                end != null &&
-                !todayStart.isBefore(
-                  DateTime(start.year, start.month, start.day),
-                ) &&
-                !todayStart.isAfter(DateTime(end.year, end.month, end.day));
-          })
+          // 与任务页同口径：按时间实时计算的「进行中」。
+          .where((task) => computeSpecialStatus(task) == '进行中')
           .map((task) => {
             ...task,
             'kind': '特殊任务',
             'daily_points': task['reward_points'],
           });
+      // 今日任务 = 三类任务中所有「进行中」的（日常不再额外限定当天到期）。
       final dailyTasks = (result[2] as List<Map<String, dynamic>>)
-          .where((task) {
-            if (task['status_tag'] != '进行中') return false;
-            if (task['task_mode'] == 'habit') {
-              final start = DateTime.tryParse('${task['start_time']}');
-              return start != null &&
-                  RepeatRule.fromColumns(
-                    task['repeat_type'] as String?,
-                    task['repeat_value'] as String?,
-                  ).isDueOn(today, start);
-            }
-            return isToday(task['next_review_time']) ||
-                isToday(task['start_time']);
-          })
+          .where((task) => task['status_tag'] == '进行中')
           .map((task) => {...task, 'kind': '日常任务'});
       final longTasks = (result[3] as List<Map<String, dynamic>>)
-          .where((task) {
-            if (task['status'] == '已完成') return false;
-            return isToday(task['deadline']);
-          })
+          // 长期任务：未完成的（进行中/已逾期）都算进行中的任务。
+          .where((task) => task['status'] != '已完成')
           .map((task) => {
             ...task,
             'kind': '长期任务',
@@ -443,21 +410,11 @@ class HomePageState extends State<HomePage> {
             'daily_points': task['reward_points'],
           });
       if (!mounted) return;
-      final latestMood = result[5] as MoodRecord?;
-      // 心情标签联动任务组件的自定义类别（缺省回退 MoodLevel 五项）。
-      final moodCategories = latestMood == null
-          ? null
-          : await TaskComponentRepository.instance.loadMoodCategories(
-              taskKind: latestMood.taskKind,
-              taskId: latestMood.taskId,
-            );
-      if (!mounted) return;
       setState(() {
         _pointsBalance = result[0] as int;
         _todayTasks = [...specialTasks, ...dailyTasks, ...longTasks];
         _latestWeight = result[4] as WeightRecord?;
-        _latestMood = latestMood;
-        _moodCategories = moodCategories;
+        _latestMood = result[5] as MoodRecord?;
         _overviewLoading = false;
       });
     } catch (error) {
@@ -1505,15 +1462,16 @@ class HomePageState extends State<HomePage> {
                   ),
                 )
               else
-                for (final task in tasks.take(4))
-                  _buildTodayTaskRow(context, task),
-              if (tasks.length > 4 && !_overviewLoading)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    '还有 ${tasks.length - 4} 项 · 点击查看全部',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurface.withValues(alpha: 0.5),
+                // 任务过多时限高内部滚动，卡片高度保持在一定范围内。
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 190),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final task in tasks)
+                          _buildTodayTaskRow(context, task),
+                      ],
                     ),
                   ),
                 ),
@@ -1719,7 +1677,7 @@ class HomePageState extends State<HomePage> {
                   ? '…'
                   : !hasMoodRecord
                   ? '未记录'
-                  : MoodCategory.labelFor(mood.level, _moodCategories),
+                  : MoodCategory.labelFor(mood.level),
               hint: hasMoodRecord ? mood.recordDate : '查看趋势',
               onTap: _overviewLoading ? null : () => unawaited(_openMoodTrend()),
             ),
@@ -1806,72 +1764,21 @@ class HomePageState extends State<HomePage> {
     _ => Colors.green.shade500,
   };
 
-  /// 未找到任何带体重/心情组件的任务时，引导用户先在任务里添加对应组件。
-  Future<void> _showRecordGuide(String componentLabel) async {
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('还没有「$componentLabel」记录'),
-        content: Text(
-          '先在任务编辑器中给任意任务添加「$componentLabel」组件，'
-          '之后就可以在这里查看和记录趋势了。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('知道了'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('去任务页'),
-          ),
-        ],
-      ),
-    );
-    if (go == true && mounted) widget.onOpenTasks?.call();
-  }
-
-  /// 打开体重趋势页：目标为最新记录所属任务（无记录时回退最近带
-  /// 体重组件的任务），查看与录入都在趋势页内完成。
+  /// 打开体重独立页：查看历史与录入都在页内完成，返回后刷新首页概览。
   Future<void> _openWeightTrend() async {
-    final target = _latestWeight;
-    if (target == null) {
-      await _showRecordGuide('体重记录');
-      return;
-    }
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => TaskTrendPage(
-          taskKind: target.taskKind,
-          taskId: target.taskId,
-          taskTitle: target.taskName,
-          metric: TrendMetric.weight,
-        ),
+        builder: (_) => const TaskTrendPage(metric: TrendMetric.weight),
       ),
     );
     unawaited(_loadHomeOverview());
   }
 
-  /// 打开心情趋势页：按目标任务的自定义类别渲染，查看与录入都在趋势
-  /// 页内完成，返回后刷新首页概览。
+  /// 打开心情独立页：默认五级类别，返回后刷新首页概览。
   Future<void> _openMoodTrend() async {
-    final target = _latestMood;
-    if (target == null) {
-      await _showRecordGuide('心情记录');
-      return;
-    }
-    final categories = await TaskComponentRepository.instance
-        .loadMoodCategories(taskKind: target.taskKind, taskId: target.taskId);
-    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => TaskTrendPage(
-          taskKind: target.taskKind,
-          taskId: target.taskId,
-          taskTitle: target.taskName,
-          metric: TrendMetric.mood,
-          moodCategories: categories,
-        ),
+        builder: (_) => const TaskTrendPage(metric: TrendMetric.mood),
       ),
     );
     unawaited(_loadHomeOverview());

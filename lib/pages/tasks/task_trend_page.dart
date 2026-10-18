@@ -10,25 +10,15 @@ import 'package:intl/intl.dart';
 
 enum TrendMetric { weight, mood }
 
-/// 体重趋势 / 心情趋势页：多条历史记录 + 折线图 + 录入与删除。
-/// [moodCategories] 为心情组件自定义类别；为空时按 MoodLevel 默认五项录入与展示。
+/// 体重 / 心情独立页：应用级记录（与任务无关），
+/// 多条历史记录 + 折线图 + 录入与删除。
 class TaskTrendPage extends StatefulWidget {
   const TaskTrendPage({
     super.key,
-    required this.taskKind,
-    required this.taskId,
-    required this.taskTitle,
     required this.metric,
-    this.moodCategories,
   });
 
-  final String taskKind;
-  final int taskId;
-  final String taskTitle;
   final TrendMetric metric;
-
-  /// 心情组件配置的自定义类别（编辑器 / 任务详情传入）。
-  final List<MoodCategory>? moodCategories;
 
   @override
   State<TaskTrendPage> createState() => _TaskTrendPageState();
@@ -42,13 +32,10 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
 
   bool get _isWeight => widget.metric == TrendMetric.weight;
 
-  /// 当前生效的心情类别（自定义优先，缺省回退 MoodLevel 五项）。
-  List<MoodCategory> get _categories => widget.moodCategories != null &&
-          widget.moodCategories!.isNotEmpty
-      ? widget.moodCategories!
-      : MoodCategory.defaults;
+  /// 心情类别：独立页使用默认五项（很差/较差/一般/不错/很好）。
+  List<MoodCategory> get _categories => MoodCategory.defaults;
 
-  String _moodLabel(int score) => MoodCategory.labelFor(score, widget.moodCategories);
+  String _moodLabel(int score) => MoodCategory.labelFor(score, _categories);
 
   @override
   void initState() {
@@ -60,15 +47,9 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
     setState(() => _loading = true);
     try {
       if (_isWeight) {
-        _weights = await _repository.loadWeights(
-          taskKind: widget.taskKind,
-          taskId: widget.taskId,
-        );
+        _weights = await _repository.loadAllWeights();
       } else {
-        _moods = await _repository.loadMoods(
-          taskKind: widget.taskKind,
-          taskId: widget.taskId,
-        );
+        _moods = await _repository.loadAllMoods();
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -178,16 +159,12 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
           return;
         }
         await _repository.addWeight(
-          taskKind: widget.taskKind,
-          taskId: widget.taskId,
           recordDate: dateKey,
           weight: weight,
           note: noteController.text,
         );
       } else {
         await _repository.addMood(
-          taskKind: widget.taskKind,
-          taskId: widget.taskId,
           recordDate: dateKey,
           level: moodLevel.value,
           note: noteController.text,
@@ -227,9 +204,9 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
 
   @override
   Widget build(BuildContext context) {
-    final title = _isWeight ? '体重趋势' : '心情趋势';
+    final title = _isWeight ? '体重' : '心情';
     return Scaffold(
-      appBar: AppBar(title: Text('$title · ${widget.taskTitle}')),
+      appBar: AppBar(title: Text(title)),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddDialog,
         icon: const Icon(Icons.add),

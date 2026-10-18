@@ -15,7 +15,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'data_chart_trend_page.dart';
-import 'task_trend_page.dart';
 
 /// 动态任务编辑器入参：[type] 为初始任务类型，[existing] 为编辑时的原始行。
 class TaskEditorArgs {
@@ -91,14 +90,8 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
   ) {
     final rawJson = row?['component_json'] as String?;
     if (rawJson != null && rawJson.trim().isNotEmpty) {
-      final doc = TaskComponentDocument.decode(rawJson);
-      // 特殊任务不再支持体重/心情：旧数据里的残留组件在编辑时剔除，
-      // 保存后从 component_json 移除（历史趋势记录保留在数据库中）。
-      if (type == TaskType.shortTerm) {
-        doc.remove(ComponentType.weight);
-        doc.remove(ComponentType.mood);
-      }
-      return doc;
+      // 旧 component_json 里的 weight/mood 残留项由解码容错自动跳过。
+      return TaskComponentDocument.decode(rawJson);
     }
     // 老数据（component_json 为空）：从列字段重建默认文档。
     final doc = TaskComponentDocument.defaultFor(type);
@@ -303,12 +296,9 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
   /// 不同任务类型下可用的组件（与存储/通知能力对齐）。
   List<ComponentType> _availableTypes() {
     final hidden = switch (_type) {
-      // 特殊任务不支持体重/心情记录（仅日常/长期/习惯任务可用）。
       TaskType.shortTerm => {
         ComponentType.repeatRule,
         ComponentType.deadline,
-        ComponentType.weight,
-        ComponentType.mood,
       },
       // 日常任务放开重复规则：添加后保存时自动转为习惯任务。
       TaskType.daily => {ComponentType.reminders, ComponentType.deadline},
@@ -667,11 +657,6 @@ class _ComponentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 日常任务的体重 / 心情为固定组件：默认携带，不允许移除。
-    final isFixed =
-        editor._type == TaskType.daily &&
-        (component.type == ComponentType.weight ||
-            component.type == ComponentType.mood);
     return Card(
       child: Column(
         children: [
@@ -695,25 +680,11 @@ class _ComponentCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
-              if (isFixed)
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: Tooltip(
-                    message: '日常任务固定组件',
-                    child: Icon(
-                      Icons.push_pin_outlined,
-                      size: 16,
-                      color: Theme.of(context).hintColor,
-                    ),
-                  ),
-                )
-              else
-                IconButton(
-                  tooltip: '移除组件',
-                  icon: const Icon(Icons.close, size: 19),
-                  onPressed: () =>
-                      editor.setStateForRemove(component.type),
-                ),
+              IconButton(
+                tooltip: '移除组件',
+                icon: const Icon(Icons.close, size: 19),
+                onPressed: () => editor.setStateForRemove(component.type),
+              ),
             ],
           ),
           Padding(
@@ -950,9 +921,6 @@ class _ComponentBodyState extends State<_ComponentBody> {
         return _RepeatRuleBody(parent: this);
       case ComponentType.reminders:
         return _SpecialReminderBody(parent: this);
-      case ComponentType.weight:
-      case ComponentType.mood:
-        return _RecordComponentBody(parent: this);
       case ComponentType.dataChart:
         return _DataChartBody(parent: this);
       case ComponentType.progress:
@@ -1486,229 +1454,6 @@ class _AttachmentBody extends StatelessWidget {
           label: Text(isImage ? '添加图片' : '添加语音文件'),
         ),
       ],
-    );
-  }
-}
-
-/// 体重 / 心情组件：入口按钮（多条记录与曲线图在趋势页管理）。
-class _RecordComponentBody extends StatefulWidget {
-  const _RecordComponentBody({required this.parent});
-
-  final _ComponentBodyState parent;
-
-  @override
-  State<_RecordComponentBody> createState() => _RecordComponentBodyState();
-}
-
-class _RecordComponentBodyState extends State<_RecordComponentBody> {
-  int _weightCount = 0;
-  int _moodCount = 0;
-
-  _TaskEditorPageState get editor => widget.parent.editor;
-  bool get isWeight =>
-      widget.parent.component.type == ComponentType.weight;
-
-  /// 当前心情类别（自定义优先，缺省回退 MoodLevel 五项）。
-  List<MoodCategory> get _categories =>
-      MoodCategory.parse(widget.parent.data);
-
-  @override
-  void initState() {
-    super.initState();
-    _refreshCount();
-  }
-
-  Future<void> _refreshCount() async {
-    final id = editor.taskId;
-    if (id == null) return;
-    try {
-      final repo = TaskComponentRepository.instance;
-      final kind = editor._type.storageKind;
-      if (isWeight) {
-        final records = await repo.loadWeights(taskKind: kind, taskId: id);
-        if (mounted) setState(() => _weightCount = records.length);
-      } else {
-        final records = await repo.loadMoods(taskKind: kind, taskId: id);
-        if (mounted) setState(() => _moodCount = records.length);
-      }
-    } catch (_) {
-      // 计数失败不影响编辑。
-    }
-  }
-
-  Future<void> _openTrend() async {
-    final id = editor.taskId;
-    if (id == null || !mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TaskTrendPage(
-          taskKind: editor._type.storageKind,
-          taskId: id,
-          taskTitle: editor.titleText,
-          metric: isWeight ? TrendMetric.weight : TrendMetric.mood,
-          moodCategories: isWeight ? null : _categories,
-        ),
-      ),
-    );
-    await _refreshCount();
-  }
-
-  /// 新增心情类别：标签 + 分值（1-5），写入组件 data.categories。
-  Future<void> _addCategory() async {
-    final labelController = TextEditingController();
-    var score = 3;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('添加心情类别'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: labelController,
-                autofocus: true,
-                maxLength: 10,
-                decoration: const InputDecoration(
-                  labelText: '类别名称',
-                  hintText: '如：开心、焦虑、平静',
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text('对应分值', style: Theme.of(dialogContext).textTheme.bodySmall),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 6,
-                children: [
-                  for (var s = 1; s <= 5; s++)
-                    ChoiceChip(
-                      label: Text('$s 分'),
-                      selected: score == s,
-                      onSelected: (_) => setDialogState(() => score = s),
-                    ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('添加'),
-            ),
-          ],
-        ),
-      ),
-    );
-    // 等待退场动画结束再释放，避免输入框仍在树上时崩溃。
-    await waitForDialogDismissal();
-    final label = labelController.text.trim();
-    labelController.dispose();
-    if (confirmed != true || label.isEmpty) return;
-    final current = _categories;
-    if (current.any((item) => item.label == label)) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('类别名称已存在')));
-      }
-      return;
-    }
-    widget.parent.mutate((d) {
-      d[ComponentDataKeys.categories] = [
-        for (final item in current) item.toJson(),
-        {'label': label, 'score': score},
-      ];
-    });
-    setState(() {});
-  }
-
-  void _removeCategory(MoodCategory category) {
-    final remaining = [
-      for (final item in _categories)
-        if (item.label != category.label) item,
-    ];
-    if (remaining.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('至少保留一个心情类别')));
-      return;
-    }
-    widget.parent.mutate((d) {
-      d[ComponentDataKeys.categories] = [
-        for (final item in remaining) item.toJson(),
-      ];
-    });
-    setState(() {});
-  }
-
-  /// 心情类别管理区：chips 展示 + 添加 / 删除。
-  Widget _buildCategoryEditor(BuildContext context) {
-    final categories = _categories;
-    final isDefault =
-        widget.parent.data[ComponentDataKeys.categories] == null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Text('心情类别', style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(width: 8),
-            Text(
-              isDefault ? '默认五项，可自定义' : '${categories.length} 个类别',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          children: [
-            for (final category in categories)
-              InputChip(
-                label: Text('${category.label}（${category.score}分）'),
-                onDeleted: () => _removeCategory(category),
-              ),
-            ActionChip(
-              avatar: const Icon(Icons.add, size: 18),
-              label: const Text('添加类别'),
-              onPressed: _addCategory,
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final count = isWeight ? _weightCount : _moodCount;
-    final saved = editor.taskId != null;
-    final entryRow = Row(
-      children: [
-        Expanded(
-          child: Text(
-            saved ? '已记录 $count 条' : '保存任务后可录入多条记录并查看曲线图',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
-        FilledButton.tonalIcon(
-          onPressed: saved ? _openTrend : null,
-          icon: const Icon(Icons.show_chart),
-          label: Text(isWeight ? '体重记录' : '心情记录'),
-        ),
-      ],
-    );
-    if (isWeight) return entryRow;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [entryRow, _buildCategoryEditor(context)],
     );
   }
 }

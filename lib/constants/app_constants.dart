@@ -102,9 +102,9 @@ enum ComponentType {
   // 积分类
   rewardPoints('reward_points', '完成奖励积分', Icons.stars_outlined),
   penaltyPoints('penalty_points', '逾期惩罚积分', Icons.warning_amber_outlined),
-  // 数据记录类（多条历史，支撑曲线图）
-  weight('weight', '体重记录', Icons.monitor_weight_outlined),
-  mood('mood', '心情记录', Icons.mood_outlined),
+  // 数据记录类（多条历史，支撑曲线图）。
+  // 体重 / 心情已独立为应用级功能（首页直达的独立页面），
+  // 不再是任务组件；旧 component_json 中的残留项解析时自动跳过。
   dataChart('data_chart', '数据分析', Icons.insights_outlined),
   // 进度类
   progress('progress', '进度百分比', Icons.percent),

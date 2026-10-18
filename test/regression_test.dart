@@ -416,20 +416,20 @@ void main() {
 
     test('upsert, update, remove and reorder mutate in place', () {
       final doc = TaskComponentDocument.defaultFor(TaskType.daily);
-      doc.upsert(ComponentType.weight);
-      expect(doc.has(ComponentType.weight), isTrue);
-      doc.updateData(ComponentType.weight, {ComponentDataKeys.value: 70});
-      expect(doc.dataOf(ComponentType.weight)[ComponentDataKeys.value], 70);
+      doc.upsert(ComponentType.dataChart);
+      expect(doc.has(ComponentType.dataChart), isTrue);
+      doc.updateData(ComponentType.dataChart, {ComponentDataKeys.value: 70});
+      expect(doc.dataOf(ComponentType.dataChart)[ComponentDataKeys.value], 70);
       final originalOrder = doc.components.map((c) => c.type).toList();
-      // 体重是日常任务固定组件，默认不在首位；移到最前后其余顺序平移。
-      final weightIndex = doc.indexOf(ComponentType.weight);
-      expect(weightIndex, greaterThan(0));
-      doc.reorder(weightIndex, 0);
-      expect(doc.components.first.type, ComponentType.weight);
+      // 数据分析默认不在首位；移到最前后其余顺序平移。
+      final chartIndex = doc.indexOf(ComponentType.dataChart);
+      expect(chartIndex, greaterThan(0));
+      doc.reorder(chartIndex, 0);
+      expect(doc.components.first.type, ComponentType.dataChart);
       expect(doc.components[1].type, originalOrder.first);
       expect(doc.components.length, originalOrder.length);
-      doc.remove(ComponentType.weight);
-      expect(doc.has(ComponentType.weight), isFalse);
+      doc.remove(ComponentType.dataChart);
+      expect(doc.has(ComponentType.dataChart), isFalse);
     });
 
     test('each task type gets its default component set', () {
@@ -544,12 +544,14 @@ void main() {
   });
 
   group('task editor defaults', () {
-    test('daily tasks always include fixed weight and mood components', () {
-      final types = TaskComponentDocument.defaultFor(
-        TaskType.daily,
-      ).components.map((c) => c.type).toList();
-      expect(types, contains(ComponentType.weight));
-      expect(types, contains(ComponentType.mood));
+    test('legacy weight and mood components are dropped when decoding', () {
+      // 体重 / 心情已独立为应用级功能：旧 component_json 中的残留项
+      // 在解码时按未知类型容错跳过，不再进入任务组件列表。
+      final doc = TaskComponentDocument.decode(
+        '[{"type":"weight","data":{}},{"type":"mood","data":{}},'
+        '{"type":"tag","data":{}}]',
+      );
+      expect(doc.components.single.type, ComponentType.tag);
     });
 
     test('data chart component survives a json round trip', () {

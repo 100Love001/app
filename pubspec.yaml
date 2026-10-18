@@ -51,9 +51,12 @@ dependencies:
   share_plus: ^12.0.0
   crypto: ^3.0.6
   encrypt: ^5.0.3
+  archive: ^4.0.7
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to

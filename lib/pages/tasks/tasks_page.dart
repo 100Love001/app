@@ -4,7 +4,6 @@ import 'package:app/constants/app_constants.dart';
 import 'package:app/pages/records/records_page.dart';
 import 'package:app/pages/tasks/data_chart_trend_page.dart';
 import 'package:app/pages/tasks/task_editor_page.dart';
-import 'package:app/pages/tasks/task_trend_page.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/notifications/local_notification_service.dart';
@@ -14,6 +13,7 @@ import 'package:app/stores/tasks/task_repository.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
 import 'package:app/utils/task_component.dart';
+import 'package:app/utils/task_status.dart';
 import 'package:app/utils/time.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -594,19 +594,6 @@ class TasksPageState extends State<TasksPage> {
                     icon: const Icon(Icons.edit_outlined),
                     label: const Text('编辑'),
                   ),
-                  // 特殊任务不支持体重/心情记录，不展示趋势入口。
-                  if (!isSpecial && componentDoc.has(ComponentType.weight))
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(context, 'weight'),
-                      icon: const Icon(Icons.monitor_weight_outlined),
-                      label: const Text('体重趋势'),
-                    ),
-                  if (!isSpecial && componentDoc.has(ComponentType.mood))
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(context, 'mood'),
-                      icon: const Icon(Icons.mood_outlined),
-                      label: const Text('心情趋势'),
-                    ),
                   if (componentDoc.has(ComponentType.dataChart))
                     OutlinedButton.icon(
                       onPressed: () => Navigator.pop(context, 'dataChart'),
@@ -658,18 +645,6 @@ class TasksPageState extends State<TasksPage> {
         break;
       case 'history':
         if (!isSpecial) await _showDailyTaskHistory(task);
-        break;
-      case 'weight':
-      case 'mood':
-        await _openTrend(
-          taskKind: isSpecial ? 'special' : 'daily',
-          taskId: toInt(task['id']),
-          taskTitle: '${task['name']}',
-          metric: action == 'weight' ? TrendMetric.weight : TrendMetric.mood,
-          moodCategories: action == 'mood'
-              ? MoodCategory.parse(componentDoc.dataOf(ComponentType.mood))
-              : null,
-        );
         break;
       case 'dataChart':
         await _openDataChart(
@@ -1246,18 +1221,6 @@ class TasksPageState extends State<TasksPage> {
                     icon: const Icon(Icons.edit_outlined),
                     label: const Text('编辑'),
                   ),
-                  if (doc.has(ComponentType.weight))
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(context, 'weight'),
-                      icon: const Icon(Icons.monitor_weight_outlined),
-                      label: const Text('体重趋势'),
-                    ),
-                  if (doc.has(ComponentType.mood))
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(context, 'mood'),
-                      icon: const Icon(Icons.mood_outlined),
-                      label: const Text('心情趋势'),
-                    ),
                   if (doc.has(ComponentType.dataChart))
                     OutlinedButton.icon(
                       onPressed: () => Navigator.pop(context, 'dataChart'),
@@ -1287,17 +1250,6 @@ class TasksPageState extends State<TasksPage> {
         await _openEditor(TaskType.longTerm, existing: task);
       case 'delete':
         await _deleteLongTask(task);
-      case 'weight':
-      case 'mood':
-        await _openTrend(
-          taskKind: 'long',
-          taskId: toInt(task['task_id']),
-          taskTitle: '${task['title']}',
-          metric: action == 'weight' ? TrendMetric.weight : TrendMetric.mood,
-          moodCategories: action == 'mood'
-              ? MoodCategory.parse(doc.dataOf(ComponentType.mood))
-              : null,
-        );
       case 'dataChart':
         await _openDataChart(
           taskKind: 'long',
@@ -1308,27 +1260,6 @@ class TasksPageState extends State<TasksPage> {
       case null:
         break;
     }
-  }
-
-  Future<void> _openTrend({
-    required String taskKind,
-    required int taskId,
-    required String taskTitle,
-    required TrendMetric metric,
-    List<MoodCategory>? moodCategories,
-  }) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TaskTrendPage(
-          taskKind: taskKind,
-          taskId: taskId,
-          taskTitle: taskTitle,
-          metric: metric,
-          moodCategories: moodCategories,
-        ),
-      ),
-    );
-    await _loadTasks();
   }
 
   /// 打开数据分析图表页（按组件配置的图表类型渲染）。
@@ -1469,18 +1400,8 @@ class TasksPageState extends State<TasksPage> {
     ),
   );
 
-  String _specialStatus(Map<String, dynamic> task) {
-    final storedStatus = task['status_tag'] as String? ?? '未开始';
-    if (storedStatus == '已完成') return storedStatus;
-    if (storedStatus == '未完成') return '已结束';
-    final start = DateTime.tryParse('${task['start_time']}');
-    final end = DateTime.tryParse('${task['end_time']}');
-    if (start == null || end == null) return storedStatus;
-    final now = DateTime.now();
-    if (now.isBefore(start)) return '未开始';
-    if (now.isAfter(end)) return '已结束';
-    return '进行中';
-  }
+  String _specialStatus(Map<String, dynamic> task) =>
+      computeSpecialStatus(task);
 
   Widget _buildFolderTabs(
     List<String> folders,
@@ -1642,6 +1563,7 @@ class _TodayTaskCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final isSpecial = task['kind'] == '特殊任务';
     final accentColor = isSpecial ? colorScheme.tertiary : colorScheme.primary;
+    final onGradient = colorScheme.onPrimary;
     final rewardPoints = toInt(
       task[isSpecial ? 'reward_points' : 'daily_points'],
     );
@@ -1651,12 +1573,20 @@ class _TodayTaskCard extends StatelessWidget {
     return Card(
       clipBehavior: Clip.antiAlias,
       elevation: 2,
-      shadowColor: accentColor.withValues(alpha: 0.15),
+      shadowColor: accentColor.withValues(alpha: 0.25),
       child: InkWell(
         onTap: onTap,
         child: Container(
           decoration: BoxDecoration(
-            border: Border(left: BorderSide(color: accentColor, width: 4)),
+            // 与财务页总资金卡同款的主色渐变，跟随「我的-外观配置」联动；
+            // 特殊任务反向渐变以示区分。
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isSpecial
+                  ? [colorScheme.tertiary, colorScheme.primary]
+                  : [colorScheme.primary, colorScheme.tertiary],
+            ),
           ),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -1671,13 +1601,13 @@ class _TodayTaskCard extends StatelessWidget {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: accentColor.withValues(alpha: 0.12),
+                        color: onGradient.withValues(alpha: 0.18),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         task['kind'] as String,
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: accentColor,
+                          color: onGradient,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1689,13 +1619,14 @@ class _TodayTaskCard extends StatelessWidget {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: colorScheme.surfaceContainerHighest,
+                        color: onGradient.withValues(alpha: 0.18),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         tagName,
-                        style: Theme.of(context).textTheme.labelSmall
-                            ?.copyWith(color: colorScheme.onSurfaceVariant),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: onGradient.withValues(alpha: 0.9),
+                        ),
                       ),
                     ),
                     const Spacer(),
@@ -1706,23 +1637,19 @@ class _TodayTaskCard extends StatelessWidget {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.green.withValues(alpha: 0.12),
+                          color: onGradient.withValues(alpha: 0.22),
                           borderRadius: BorderRadius.circular(14),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              Icons.check_circle,
-                              size: 14,
-                              color: Colors.green[700],
-                            ),
+                            Icon(Icons.check_circle, size: 14, color: onGradient),
                             const SizedBox(width: 4),
                             Text(
                               '已领取',
                               style: Theme.of(context).textTheme.labelSmall
                                   ?.copyWith(
-                                    color: Colors.green[700],
+                                    color: onGradient,
                                     fontWeight: FontWeight.w600,
                                   ),
                             ),
@@ -1734,16 +1661,21 @@ class _TodayTaskCard extends StatelessWidget {
                         height: 30,
                         child: FilledButton.tonalIcon(
                           onPressed: onComplete,
-                          icon: const Icon(Icons.check, size: 16),
+                          icon: Icon(Icons.check, size: 16, color: accentColor),
                           label: Text(
                             isSpecial || task['kind'] == '长期任务'
                                 ? '完成'
                                 : '领取',
-                            style: const TextStyle(fontSize: 12),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: accentColor,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             minimumSize: const Size(0, 30),
+                            backgroundColor: onGradient,
                           ),
                         ),
                       ),
@@ -1754,27 +1686,30 @@ class _TodayTaskCard extends StatelessWidget {
                   task['name'] as String,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: onGradient,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   task['content'] as String? ?? '点击查看详细内容',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: colorScheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: onGradient.withValues(alpha: 0.85),
+                  ),
                 ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
                     if (rewardPoints > 0) ...[
-                      Icon(Icons.stars, size: 14, color: Colors.amber[700]),
+                      Icon(Icons.stars, size: 14, color: onGradient),
                       const SizedBox(width: 3),
                       Text(
                         '+$rewardPoints',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Colors.amber[700],
+                          color: onGradient,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1784,24 +1719,24 @@ class _TodayTaskCard extends StatelessWidget {
                       Icon(
                         Icons.remove_circle_outline,
                         size: 14,
-                        color: colorScheme.error,
+                        color: onGradient.withValues(alpha: 0.9),
                       ),
                       const SizedBox(width: 3),
                       Text(
                         '-$penaltyPoints',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: colorScheme.error,
+                          color: onGradient.withValues(alpha: 0.9),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
                     const Spacer(),
                     if (isSpecial)
-                      _buildTimeInfo(context, colorScheme)
+                      _buildTimeInfo(context, onGradient)
                     else if (task['kind'] == '长期任务')
-                      _buildDeadlineInfo(context, colorScheme)
+                      _buildDeadlineInfo(context, onGradient)
                     else
-                      _buildReviewStageInfo(context, colorScheme),
+                      _buildReviewStageInfo(context, onGradient),
                   ],
                 ),
               ],
@@ -1812,7 +1747,7 @@ class _TodayTaskCard extends StatelessWidget {
     );
   }
 
-  Widget _buildTimeInfo(BuildContext context, ColorScheme colorScheme) {
+  Widget _buildTimeInfo(BuildContext context, Color infoColor) {
     final start = DateTime.tryParse('${task['start_time']}');
     final end = DateTime.tryParse('${task['end_time']}');
     if (start == null || end == null) return const SizedBox.shrink();
@@ -1831,13 +1766,13 @@ class _TodayTaskCard extends StatelessWidget {
         Icon(
           Icons.hourglass_bottom,
           size: 13,
-          color: colorScheme.onSurfaceVariant,
+          color: infoColor,
         ),
         const SizedBox(width: 3),
         Text(
           label,
           style: Theme.of(context).textTheme.labelSmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
+              ?.copyWith(color: infoColor),
         ),
       ],
     );
@@ -1845,7 +1780,7 @@ class _TodayTaskCard extends StatelessWidget {
 
   /// 长期任务没有复习阶段概念，今日卡片展示截止信息。
   /// 今日卡片仅包含截止日为今天的长期任务。
-  Widget _buildDeadlineInfo(BuildContext context, ColorScheme colorScheme) {
+  Widget _buildDeadlineInfo(BuildContext context, Color infoColor) {
     final deadline = DateTime.tryParse('${task['deadline']}');
     if (deadline == null) return const SizedBox.shrink();
     final hasTime = deadline.hour != 0 || deadline.minute != 0;
@@ -1856,28 +1791,28 @@ class _TodayTaskCard extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.event, size: 13, color: colorScheme.onSurfaceVariant),
+        Icon(Icons.event, size: 13, color: infoColor),
         const SizedBox(width: 3),
         Text(
           label,
           style: Theme.of(context).textTheme.labelSmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
+              ?.copyWith(color: infoColor),
         ),
       ],
     );
   }
 
-  Widget _buildReviewStageInfo(BuildContext context, ColorScheme colorScheme) {
+  Widget _buildReviewStageInfo(BuildContext context, Color infoColor) {
     final stage = toInt(task['review_stage']);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.repeat, size: 13, color: colorScheme.onSurfaceVariant),
+        Icon(Icons.repeat, size: 13, color: infoColor),
         const SizedBox(width: 3),
         Text(
           '第 ${stage + 1} 次复习',
           style: Theme.of(context).textTheme.labelSmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
+              ?.copyWith(color: infoColor),
         ),
       ],
     );

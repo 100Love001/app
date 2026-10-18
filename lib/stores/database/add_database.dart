@@ -28,7 +28,7 @@ class AppDatabase {
     final password = await EncryptionKeyManager.instance.getOrCreateKey();
     return openDatabase(
       path,
-      version: 21,
+      version: 22,
       password: password,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,

@@ -256,9 +256,8 @@ class TaskComponentDocument {
             type: ComponentType.penaltyPoints,
             data: {ComponentDataKeys.enabled: true, ComponentDataKeys.points: 0},
           ),
-          // 体重 / 心情为日常任务固定组件：默认携带且编辑器内不可移除。
-          const TaskComponent(type: ComponentType.weight),
-          const TaskComponent(type: ComponentType.mood),
+          // 体重 / 心情已独立为应用级功能（首页直达的独立页面），
+          // 不再作为任务组件存在。
         ]);
       case TaskType.habit:
         return TaskComponentDocument([
