@@ -78,10 +78,14 @@ class _AnniversariesViewState extends State<AnniversariesView> {
       setState(() {
         _anniversaries = items;
         _loading = false;
-        for (final item in items) {
-          final tag = ((item['tag'] as String?) ?? '').trim();
-          _expandedFolders.add(tag.isEmpty ? '未分类' : tag);
-        }
+        // 文件夹默认全部折叠，仅保留仍处于展开状态的有效文件夹。
+        final validTags = {
+          for (final item in items)
+            (item['tag'] as String?)?.trim().isEmpty ?? true
+                ? '未分类'
+                : (item['tag'] as String).trim(),
+        };
+        _expandedFolders.removeWhere((tag) => !validTags.contains(tag));
       });
     } catch (error) {
       if (!mounted) return;
@@ -689,7 +693,10 @@ class _AnniversariesViewState extends State<AnniversariesView> {
                 if (isExpanded) {
                   _expandedFolders.remove(folder.tag);
                 } else {
-                  _expandedFolders.add(folder.tag);
+                  // 手风琴：展开当前文件夹时收起其他同级文件夹。
+                  _expandedFolders
+                    ..clear()
+                    ..add(folder.tag);
                 }
               });
             },

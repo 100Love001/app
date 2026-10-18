@@ -469,6 +469,24 @@ class TableSql {
       ON task_mood_records(task_kind, task_id, record_date)
   ''';
 
+  // 任务动态组件-数据分析记录：数值 + 日期，多条记录生成折线/柱状/饼图/表格。
+  static const String createTaskDataRecords = '''
+    CREATE TABLE task_data_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_kind TEXT NOT NULL,
+      task_id INTEGER NOT NULL,
+      record_date TEXT NOT NULL,
+      value REAL NOT NULL,
+      note TEXT,
+      create_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+    )
+  ''';
+
+  static const String createTaskDataRecordIndexes = '''
+    CREATE INDEX IF NOT EXISTS idx_task_data_records_task_date
+      ON task_data_records(task_kind, task_id, record_date)
+  ''';
+
   static const String createTaskPenaltyIndex = '''
     CREATE INDEX IF NOT EXISTS idx_tasks_penalty_scan
       ON tasks(enable_penalty, status, deadline)
@@ -610,6 +628,8 @@ class TableSql {
     createTaskMoodRecords,
     createTaskRecordIndexes,
     createTaskMoodRecordIndexes,
+    createTaskDataRecords,
+    createTaskDataRecordIndexes,
     createTaskPenaltyIndex,
     createTags,
     createAppSettings,

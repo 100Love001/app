@@ -421,7 +421,10 @@ void main() {
       doc.updateData(ComponentType.weight, {ComponentDataKeys.value: 70});
       expect(doc.dataOf(ComponentType.weight)[ComponentDataKeys.value], 70);
       final originalOrder = doc.components.map((c) => c.type).toList();
-      doc.reorder(originalOrder.length - 1, 0);
+      // 体重是日常任务固定组件，默认不在首位；移到最前后其余顺序平移。
+      final weightIndex = doc.indexOf(ComponentType.weight);
+      expect(weightIndex, greaterThan(0));
+      doc.reorder(weightIndex, 0);
       expect(doc.components.first.type, ComponentType.weight);
       expect(doc.components[1].type, originalOrder.first);
       expect(doc.components.length, originalOrder.length);
@@ -483,6 +486,89 @@ void main() {
       expect(MoodLevel.fromScore(5), MoodLevel.veryGood);
       expect(MoodLevel.fromScore(null), MoodLevel.neutral);
       expect(MoodLevel.fromScore(99), MoodLevel.neutral);
+    });
+  });
+
+  group('MoodCategory', () {
+    test('defaults mirror the five MoodLevel entries', () {
+      final defaults = MoodCategory.defaults;
+      expect(defaults.length, MoodLevel.values.length);
+      for (var i = 0; i < defaults.length; i++) {
+        expect(defaults[i].label, MoodLevel.values[i].label);
+        expect(defaults[i].score, MoodLevel.values[i].score);
+      }
+    });
+
+    test('parse falls back to defaults on missing or corrupted data', () {
+      expect(MoodCategory.parse(const {}), hasLength(MoodLevel.values.length));
+      expect(
+        MoodCategory.parse(const {ComponentDataKeys.categories: 'broken'}),
+        hasLength(MoodLevel.values.length),
+      );
+      expect(
+        MoodCategory.parse(const {ComponentDataKeys.categories: []}),
+        hasLength(MoodLevel.values.length),
+      );
+      // 全部条目非法（空标签 / 越界分值）时同样回退默认五项。
+      expect(
+        MoodCategory.parse(const {
+          ComponentDataKeys.categories: [
+            {'label': '', 'score': 3},
+            {'label': '开心', 'score': 0},
+            {'label': '开心', 'score': 6},
+          ],
+        }),
+        hasLength(MoodLevel.values.length),
+      );
+    });
+
+    test('parse keeps valid entries and skips invalid ones', () {
+      final parsed = MoodCategory.parse(const {
+        ComponentDataKeys.categories: [
+          {'label': '平静', 'score': 3},
+          {'label': '亢奋', 'score': '5'},
+          {'label': '', 'score': 1},
+        ],
+      });
+      expect(parsed, hasLength(2));
+      expect(parsed.first.label, '平静');
+      expect(parsed.last.score, 5);
+    });
+
+    test('labelFor prefers custom categories then falls back to MoodLevel', () {
+      const categories = [MoodCategory(label: '多云', score: 2)];
+      expect(MoodCategory.labelFor(2, categories), '多云');
+      expect(MoodCategory.labelFor(4, categories), MoodLevel.fromScore(4).label);
+      expect(MoodCategory.labelFor(3), MoodLevel.neutral.label);
+    });
+  });
+
+  group('task editor defaults', () {
+    test('daily tasks always include fixed weight and mood components', () {
+      final types = TaskComponentDocument.defaultFor(
+        TaskType.daily,
+      ).components.map((c) => c.type).toList();
+      expect(types, contains(ComponentType.weight));
+      expect(types, contains(ComponentType.mood));
+    });
+
+    test('data chart component survives a json round trip', () {
+      final doc = TaskComponentDocument([
+        const TaskComponent(
+          type: ComponentType.dataChart,
+          data: {
+            ComponentDataKeys.chartType: 'bar',
+            ComponentDataKeys.title: '支出趋势',
+            ComponentDataKeys.unit: '元',
+          },
+        ),
+      ]);
+      final decoded = TaskComponentDocument.decode(doc.encode());
+      expect(decoded.components, hasLength(1));
+      final data = decoded.dataOf(ComponentType.dataChart);
+      expect(data[ComponentDataKeys.chartType], 'bar');
+      expect(data[ComponentDataKeys.title], '支出趋势');
+      expect(data[ComponentDataKeys.unit], '元');
     });
   });
 }

@@ -1,6 +1,7 @@
 import 'package:app/constants/app_constants.dart';
 import 'package:app/stores/tasks/task_component_repository.dart';
 import 'package:app/utils/chart_data_helper.dart';
+import 'package:app/utils/task_component.dart';
 import 'package:app/utils/time.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:intl/intl.dart';
 enum TrendMetric { weight, mood }
 
 /// 体重趋势 / 心情趋势页：多条历史记录 + 折线图 + 录入与删除。
+/// [moodCategories] 为心情组件自定义类别；为空时按 MoodLevel 默认五项录入与展示。
 class TaskTrendPage extends StatefulWidget {
   const TaskTrendPage({
     super.key,
@@ -16,12 +18,16 @@ class TaskTrendPage extends StatefulWidget {
     required this.taskId,
     required this.taskTitle,
     required this.metric,
+    this.moodCategories,
   });
 
   final String taskKind;
   final int taskId;
   final String taskTitle;
   final TrendMetric metric;
+
+  /// 心情组件配置的自定义类别（编辑器 / 任务详情传入）。
+  final List<MoodCategory>? moodCategories;
 
   @override
   State<TaskTrendPage> createState() => _TaskTrendPageState();
@@ -34,6 +40,14 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
   bool _loading = true;
 
   bool get _isWeight => widget.metric == TrendMetric.weight;
+
+  /// 当前生效的心情类别（自定义优先，缺省回退 MoodLevel 五项）。
+  List<MoodCategory> get _categories => widget.moodCategories != null &&
+          widget.moodCategories!.isNotEmpty
+      ? widget.moodCategories!
+      : MoodCategory.defaults;
+
+  String _moodLabel(int score) => MoodCategory.labelFor(score, widget.moodCategories);
 
   @override
   void initState() {
@@ -64,7 +78,10 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
     final selectedDate = ValueNotifier<DateTime>(DateTime.now());
     final valueController = TextEditingController();
     final noteController = TextEditingController();
-    var moodLevel = ValueNotifier<int>(3);
+    final categories = _categories;
+    var moodLevel = ValueNotifier<int>(
+      categories[categories.length ~/ 2].score,
+    );
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -111,11 +128,11 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
                   builder: (_, level, _) => Wrap(
                     spacing: 6,
                     children: [
-                      for (var score = 1; score <= 5; score++)
+                      for (final category in categories)
                         ChoiceChip(
-                          label: Text(MoodLevel.fromScore(score).label),
-                          selected: level == score,
-                          onSelected: (_) => moodLevel.value = score,
+                          label: Text(category.label),
+                          selected: level == category.score,
+                          onSelected: (_) => moodLevel.value = category.score,
                         ),
                     ],
                   ),
@@ -373,7 +390,7 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
           items: [
             ('记录', '${_moods.length} 天'),
             ('平均心情', average == null ? '-' : average.toStringAsFixed(1)),
-            ('最新', MoodLevel.fromScore(_moods.last.level).label),
+            ('最新', _moodLabel(_moods.last.level)),
             ('', ''),
           ],
         ),
@@ -421,7 +438,7 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
                         return const SizedBox.shrink();
                       }
                       return Text(
-                        MoodLevel.fromScore(value.round()).label,
+                        _moodLabel(value.round()),
                         style: const TextStyle(fontSize: 9),
                       );
                     },
@@ -443,7 +460,7 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
                     for (final spot in touchedSpots)
                       LineTooltipItem(
                         '${_moods[spot.spotIndex].recordDate}\n'
-                        '${MoodLevel.fromScore(spot.y.round()).label}',
+                        '${_moodLabel(spot.y.round())}',
                         const TextStyle(fontSize: 11),
                       ),
                   ],
@@ -468,7 +485,7 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
             child: ListTile(
               dense: true,
               leading: Icon(MoodLevel.fromScore(_moods[i].level).icon),
-              title: Text(MoodLevel.fromScore(_moods[i].level).label),
+              title: Text(_moodLabel(_moods[i].level)),
               subtitle: Text(
                 _moods[i].note.isEmpty
                     ? _moods[i].recordDate

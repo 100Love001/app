@@ -12,6 +12,7 @@ import 'package:app/stores/tasks/task_repository.dart';
 import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
+import 'package:app/utils/task_component.dart';
 import 'package:app/utils/time.dart';
 import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
@@ -52,6 +53,7 @@ class HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> _todayTasks = [];
   WeightRecord? _latestWeight;
   MoodRecord? _latestMood;
+  List<MoodCategory>? _moodCategories;
 
   @override
   void initState() {
@@ -440,11 +442,21 @@ class HomePageState extends State<HomePage> {
             'daily_points': task['reward_points'],
           });
       if (!mounted) return;
+      final latestMood = result[5] as MoodRecord?;
+      // 心情标签联动任务组件的自定义类别（缺省回退 MoodLevel 五项）。
+      final moodCategories = latestMood == null
+          ? null
+          : await TaskComponentRepository.instance.loadMoodCategories(
+              taskKind: latestMood.taskKind,
+              taskId: latestMood.taskId,
+            );
+      if (!mounted) return;
       setState(() {
         _pointsBalance = result[0] as int;
         _todayTasks = [...specialTasks, ...dailyTasks, ...longTasks];
         _latestWeight = result[4] as WeightRecord?;
-        _latestMood = result[5] as MoodRecord?;
+        _latestMood = latestMood;
+        _moodCategories = moodCategories;
         _overviewLoading = false;
       });
     } catch (error) {
@@ -1037,17 +1049,30 @@ class HomePageState extends State<HomePage> {
                             color: Theme.of(context).colorScheme.primary,
                           ),
                           const SizedBox(width: 5),
-                          Flexible(
-                            child: Text(
-                              nearestAnniversary == null
-                                  ? '添加纪念日'
-                                  : '${nearestAnniversary.title} · '
-                                        '${_anniversaryCountdown(nearestAnniversary)}',
+                          // 标题可省略，日期（月日）独立渲染保证永远完整显示。
+                          if (nearestAnniversary == null)
+                            Text(
+                              '添加纪念日',
                               maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelMedium,
+                            )
+                          else ...[
+                            Flexible(
+                              child: Text(
+                                nearestAnniversary.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
+                            ),
+                            Text(
+                              ' · ${_anniversaryDateLabel(nearestAnniversary)}',
+                              maxLines: 1,
+                              softWrap: false,
+                              overflow: TextOverflow.visible,
                               style: Theme.of(context).textTheme.labelMedium,
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),
@@ -1222,11 +1247,10 @@ class HomePageState extends State<HomePage> {
     );
   }
 
-  String _anniversaryCountdown(HomeAnniversary anniversary) {
-    final days = anniversary.daysUntil(DateTime.now());
-    if (days <= 0) return '今天';
-    if (days == 1) return '明天';
-    return '还有 $days 天';
+  /// 首页顶部纪念日只显示月与日（如 10月25日），保证长标题下日期完整可见。
+  String _anniversaryDateLabel(HomeAnniversary anniversary) {
+    final date = anniversary.nextDate;
+    return '${date.month}月${date.day}日';
   }
 
   Widget _buildPointsCard(BuildContext context) {
@@ -1691,7 +1715,7 @@ class HomePageState extends State<HomePage> {
                   ? '…'
                   : mood == null
                   ? '未记录'
-                  : moodLevel.label,
+                  : MoodCategory.labelFor(mood.level, _moodCategories),
               hint: mood == null ? '点击录入' : mood.recordDate,
               onTap: _overviewLoading ? null : () => unawaited(_quickRecordMood()),
             ),
@@ -1874,14 +1898,20 @@ class HomePageState extends State<HomePage> {
     }
   }
 
-  /// 快捷记录心情：选择 1-5 级心情 + 可选备注，写入最近使用的心情任务。
+  /// 快捷记录心情：按任务心情组件自定义类别（缺省 MoodLevel 五项）选择 + 可选备注，
+  /// 写入最近使用的心情任务。
   Future<void> _quickRecordMood() async {
     final target = _latestMood;
     if (target == null) {
       await _showRecordGuide('心情记录');
       return;
     }
-    var selected = target.level;
+    final categories = await TaskComponentRepository.instance
+        .loadMoodCategories(taskKind: target.taskKind, taskId: target.taskId);
+    if (!mounted) return;
+    var selected = categories.any((item) => item.score == target.level)
+        ? target.level
+        : categories[categories.length ~/ 2].score;
     final noteController = TextEditingController();
     final saved = await showDialog<bool>(
       context: context,
@@ -1903,12 +1933,12 @@ class HomePageState extends State<HomePage> {
                 spacing: 8,
                 runSpacing: 4,
                 children: [
-                  for (final level in MoodLevel.values)
+                  for (final category in categories)
                     ChoiceChip(
-                      label: Text(level.label),
-                      selected: selected == level.score,
+                      label: Text(category.label),
+                      selected: selected == category.score,
                       onSelected: (_) =>
-                          setDialogState(() => selected = level.score),
+                          setDialogState(() => selected = category.score),
                     ),
                 ],
               ),

@@ -105,6 +105,7 @@ enum ComponentType {
   // 数据记录类（多条历史，支撑曲线图）
   weight('weight', '体重记录', Icons.monitor_weight_outlined),
   mood('mood', '心情记录', Icons.mood_outlined),
+  dataChart('data_chart', '数据分析', Icons.insights_outlined),
   // 进度类
   progress('progress', '进度百分比', Icons.percent),
   subtasks('subtasks', '子任务列表', Icons.checklist_rtl_outlined),

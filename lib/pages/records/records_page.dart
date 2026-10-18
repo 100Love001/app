@@ -46,6 +46,9 @@ class RecordsPageState extends State<RecordsPage> {
   // 用户打开记录页想直接看到正在推进的事：愿望/希望默认落在“进行中”。
   String _wishFolder = '进行中';
   String _hopeFolder = '进行中';
+  // 愿望/希望标签分组手风琴当前展开的分组名；null 表示全部收起。
+  String? _wishExpandedGroup;
+  String? _hopeExpandedGroup;
   int? _cognitionFolder;
   int? _diaryBookFolder;
   int _carouselIndex = 0;
@@ -1297,12 +1300,6 @@ class RecordsPageState extends State<RecordsPage> {
                         : () => _addItem(wish: _tab == _RecordTab.wishes),
                     icon: const Icon(Icons.add),
                   ),
-                if (!widget.taskListsOnly && _tab == _RecordTab.problems)
-                  IconButton(
-                    tooltip: '新增问题',
-                    onPressed: _loading ? null : () => _addProblem(),
-                    icon: const Icon(Icons.add),
-                  ),
                 if (_tab != _RecordTab.anniversaries)
                   IconButton(
                     onPressed: _loading ? null : _loadData,
@@ -1312,6 +1309,7 @@ class RecordsPageState extends State<RecordsPage> {
             ),
       floatingActionButton: widget.taskListsOnly
           ? FloatingActionButton.extended(
+              heroTag: 'records_fab',
               onPressed: _loading
                   ? null
                   : () => _addItem(wish: _tab == _RecordTab.wishes),
@@ -1321,6 +1319,7 @@ class RecordsPageState extends State<RecordsPage> {
             )
           : _tab == _RecordTab.cognition || _tab == _RecordTab.diary
           ? FloatingActionButton.extended(
+              heroTag: 'records_fab',
               onPressed: _loading
                   ? null
                   : () => _editDiary(
@@ -1330,6 +1329,14 @@ class RecordsPageState extends State<RecordsPage> {
                     ),
               icon: const Icon(Icons.edit_note),
               label: Text(_tab == _RecordTab.diary ? '写日记' : '记录认知'),
+            )
+          : _tab == _RecordTab.problems
+          ? FloatingActionButton.extended(
+              heroTag: 'records_fab',
+              onPressed: _loading ? null : () => _addProblem(),
+              tooltip: '新增问题',
+              icon: const Icon(Icons.add),
+              label: const Text('新增问题'),
             )
           : null,
       body: Column(
@@ -1423,6 +1430,12 @@ class RecordsPageState extends State<RecordsPage> {
           .putIfAbsent(tag == null || tag.isEmpty ? '未分类' : tag, () => [])
           .add(item);
     }
+    // 手风琴展开态：优先保留用户选择，分组变化后回落到第一个分组。
+    final groupKeys = grouped.keys.toList();
+    final storedKey = wish ? _wishExpandedGroup : _hopeExpandedGroup;
+    final expandedKey = groupKeys.contains(storedKey)
+        ? storedKey
+        : (groupKeys.isEmpty ? null : groupKeys.first);
     return RefreshIndicator(
       onRefresh: _loadData,
       child: ListView(
@@ -1458,10 +1471,21 @@ class RecordsPageState extends State<RecordsPage> {
           const SizedBox(height: 8),
           if (visible.isEmpty)
             _Empty(message: '$selectedFolder暂无内容')
-          else
+          else ...[
+            // 标签分组手风琴：点开一个分组时其他同级分组自动收起。
             for (final entry in grouped.entries)
               ExpansionTile(
-                initiallyExpanded: true,
+                key: ValueKey(
+                  '${wish ? 'wish' : 'hope'}-group-${entry.key}-${expandedKey == entry.key}',
+                ),
+                initiallyExpanded: expandedKey == entry.key,
+                onExpansionChanged: (value) => setState(() {
+                  if (wish) {
+                    _wishExpandedGroup = value ? entry.key : null;
+                  } else {
+                    _hopeExpandedGroup = value ? entry.key : null;
+                  }
+                }),
                 leading: const Icon(Icons.folder_outlined),
                 title: Text(entry.key),
                 subtitle: Text('${entry.value.length} 项'),
@@ -1473,6 +1497,7 @@ class RecordsPageState extends State<RecordsPage> {
                     ),
                 ],
               ),
+          ],
         ],
       ),
     );
@@ -1500,7 +1525,7 @@ class RecordsPageState extends State<RecordsPage> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
           if (_problems.isEmpty)
-            const _Empty(message: '暂无问题，点击右上角 + 记录一个待思考的问题')
+            const _Empty(message: '暂无问题，点击下方按钮记录一个待思考的问题')
           else ...[
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),

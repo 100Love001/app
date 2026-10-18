@@ -50,6 +50,53 @@ abstract final class ComponentDataKeys {
   static const items = 'items'; // 子任务 [{text,done}]
   static const count = 'count'; // 打卡次数
   static const files = 'files'; // 图片/语音 [{name,path}]
+  static const chartType = 'chart_type'; // 数据分析：line/bar/pie/table
+  static const title = 'title'; // 数据分析：图表名称
+  static const unit = 'unit'; // 数据分析：数值单位
+  static const categories = 'categories'; // 心情组件：自定义类别 [{label,score}]
+}
+
+/// 心情类别：标签 + 分值（1-5）。心情组件可自定义类别，
+/// 未配置时回退到 MoodLevel 默认五项，保证旧任务行为不变。
+class MoodCategory {
+  const MoodCategory({required this.label, required this.score});
+
+  final String label;
+  final int score;
+
+  Map<String, dynamic> toJson() => {'label': label, 'score': score};
+
+  /// 默认类别：MoodLevel 五项。
+  static List<MoodCategory> get defaults => [
+    for (final level in MoodLevel.values)
+      MoodCategory(label: level.label, score: level.score),
+  ];
+
+  /// 从心情组件 data 解析类别；缺失 / 损坏 / 为空时回退默认五项。
+  static List<MoodCategory> parse(Map<String, dynamic> data) {
+    final raw = data[ComponentDataKeys.categories];
+    if (raw is! List) return defaults;
+    final result = <MoodCategory>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final label = '${item['label'] ?? ''}'.trim();
+      final rawScore = item['score'];
+      final score = rawScore is num ? rawScore.toInt() : int.tryParse('$rawScore');
+      if (label.isEmpty || score == null || score < 1 || score > 5) continue;
+      result.add(MoodCategory(label: label, score: score));
+    }
+    return result.isEmpty ? defaults : result;
+  }
+
+  /// 分值对应的类别标签；自定义类别优先，查不到回退 MoodLevel 标签。
+  static String labelFor(int score, [List<MoodCategory>? categories]) {
+    if (categories != null) {
+      for (final category in categories) {
+        if (category.score == score) return category.label;
+      }
+    }
+    return MoodLevel.fromScore(score).label;
+  }
 }
 
 /// 任务的组件文档：有序组件列表 + 类型安全的增删改与 JSON 互转。
@@ -209,6 +256,9 @@ class TaskComponentDocument {
             type: ComponentType.penaltyPoints,
             data: {ComponentDataKeys.enabled: true, ComponentDataKeys.points: 0},
           ),
+          // 体重 / 心情为日常任务固定组件：默认携带且编辑器内不可移除。
+          const TaskComponent(type: ComponentType.weight),
+          const TaskComponent(type: ComponentType.mood),
         ]);
       case TaskType.habit:
         return TaskComponentDocument([

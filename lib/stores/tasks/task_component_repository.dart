@@ -1,5 +1,7 @@
+import 'package:app/constants/app_constants.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/utils/num_cast.dart';
+import 'package:app/utils/task_component.dart';
 
 /// 体重记录（动态组件「体重记录」的多条历史数据）。
 class WeightRecord {
@@ -67,9 +69,37 @@ class MoodRecord {
   );
 }
 
-/// 动态组件业务数据仓储：体重 / 心情记录表的增删查。
+/// 数据分析记录（动态组件「数据分析」的多条历史数据）。
+class DataRecord {
+  const DataRecord({
+    required this.id,
+    required this.taskKind,
+    required this.taskId,
+    required this.recordDate,
+    required this.value,
+    this.note = '',
+  });
+
+  final int id;
+  final String taskKind;
+  final int taskId;
+  final String recordDate;
+  final double value;
+  final String note;
+
+  factory DataRecord.fromMap(Map<String, dynamic> map) => DataRecord(
+    id: toInt(map['id']),
+    taskKind: '${map['task_kind']}',
+    taskId: toInt(map['task_id']),
+    recordDate: '${map['record_date']}',
+    value: toDouble(map['value']),
+    note: '${map['note'] ?? ''}',
+  );
+}
+
+/// 动态组件业务数据仓储：体重 / 心情 / 数据分析记录表的增删查。
 /// 组件配置本身（标题、组件清单、进度等）存在任务表 component_json 列，
-/// 只有需要多条历史、支撑趋势图的体重/心情数据独立建表。
+/// 只有需要多条历史、支撑趋势图的体重/心情/数据分析数据独立建表。
 class TaskComponentRepository {
   TaskComponentRepository._();
   static final TaskComponentRepository instance = TaskComponentRepository._();
@@ -134,6 +164,39 @@ class TaskComponentRepository {
   Future<void> deleteMood(int id) =>
       AppDatabase.instance.delete('task_mood_records', where: 'id = ?', whereArgs: [id]);
 
+  Future<List<DataRecord>> loadDataRecords({
+    required String taskKind,
+    required int taskId,
+  }) async {
+    final rows = await AppDatabase.instance.rawQuery(
+      '''SELECT * FROM task_data_records
+         WHERE task_kind = ? AND task_id = ?
+         ORDER BY record_date, id''',
+      [taskKind, taskId],
+    );
+    return rows.map(DataRecord.fromMap).toList();
+  }
+
+  Future<int> addDataRecord({
+    required String taskKind,
+    required int taskId,
+    required String recordDate,
+    required double value,
+    String note = '',
+  }) => AppDatabase.instance.insert('task_data_records', {
+    'task_kind': taskKind,
+    'task_id': taskId,
+    'record_date': recordDate,
+    'value': value,
+    'note': note.trim().isEmpty ? null : note.trim(),
+  });
+
+  Future<void> deleteDataRecord(int id) => AppDatabase.instance.delete(
+    'task_data_records',
+    where: 'id = ?',
+    whereArgs: [id],
+  );
+
   /// 全局最新一条体重记录（跨任务，最近使用优先）。
   /// 供首页快捷记录定位目标任务；习惯任务存于 daily_tasks（task_kind='daily'）。
   Future<WeightRecord?> latestWeight() async {
@@ -163,6 +226,31 @@ class TaskComponentRepository {
     return rows.isEmpty ? null : MoodRecord.fromMap(rows.first);
   }
 
+  /// 目标任务心情组件的自定义类别（读任务 component_json）；
+  /// 任务不存在 / 无配置 / 解析失败时回退 MoodLevel 默认五项。
+  Future<List<MoodCategory>> loadMoodCategories({
+    required String taskKind,
+    required int taskId,
+  }) async {
+    try {
+      final (table, idColumn) = switch (taskKind) {
+        'daily' => ('daily_tasks', 'id'),
+        'long' => ('tasks', 'task_id'),
+        _ => ('special_tasks', 'id'),
+      };
+      final rows = await AppDatabase.instance.rawQuery(
+        'SELECT component_json FROM $table WHERE $idColumn = ?',
+        [taskId],
+      );
+      if (rows.isEmpty) return MoodCategory.defaults;
+      final raw = rows.first['component_json'] as String?;
+      final doc = TaskComponentDocument.decode(raw);
+      return MoodCategory.parse(doc.dataOf(ComponentType.mood));
+    } catch (_) {
+      return MoodCategory.defaults;
+    }
+  }
+
   /// 删除任务时清理其全部组件历史（长期任务为物理删除时调用）。
   Future<void> deleteForTask(String taskKind, int taskId) async {
     await AppDatabase.instance.delete(
@@ -172,6 +260,11 @@ class TaskComponentRepository {
     );
     await AppDatabase.instance.delete(
       'task_mood_records',
+      where: 'task_kind = ? AND task_id = ?',
+      whereArgs: [taskKind, taskId],
+    );
+    await AppDatabase.instance.delete(
+      'task_data_records',
       where: 'task_kind = ? AND task_id = ?',
       whereArgs: [taskKind, taskId],
     );

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:app/constants/app_constants.dart';
 import 'package:app/pages/records/records_page.dart';
+import 'package:app/pages/tasks/data_chart_trend_page.dart';
 import 'package:app/pages/tasks/task_editor_page.dart';
 import 'package:app/pages/tasks/task_trend_page.dart';
 import 'package:app/stores/database/add_database.dart';
@@ -48,12 +49,12 @@ class TasksPageState extends State<TasksPage> {
   List<Map<String, dynamic>> _specialTasks = [];
   List<Map<String, dynamic>> _dailyTasks = [];
   List<Map<String, dynamic>> _longTasks = [];
-  List<Map<String, dynamic>> _dailyTags = [];
   int _carouselIndex = 0;
   String _specialFolder = '进行中';
   String _endedTaskFilter = '未完成';
   String _dailyStatus = '进行中';
-  int? _dailyTagFilter;
+  // 日常任务标签分组手风琴当前展开的分组名；null 表示全部收起。
+  String? _dailyExpandedGroup;
   Timer? _carouselTimer;
 
   @override
@@ -121,15 +122,13 @@ class TasksPageState extends State<TasksPage> {
       final results = await Future.wait([
         repo.loadSpecialTasks(),
         repo.loadDailyTasks(),
-        repo.loadDailyTags(),
         repo.loadLongTermTasks(),
       ]);
       if (!mounted) return;
       setState(() {
         _specialTasks = results[0];
         _dailyTasks = results[1];
-        _dailyTags = results[2];
-        _longTasks = results[3];
+        _longTasks = results[2];
         _carouselIndex = 0;
         _loading = false;
       });
@@ -607,6 +606,12 @@ class TasksPageState extends State<TasksPage> {
                       icon: const Icon(Icons.mood_outlined),
                       label: const Text('心情趋势'),
                     ),
+                  if (componentDoc.has(ComponentType.dataChart))
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'dataChart'),
+                      icon: const Icon(Icons.insights_outlined),
+                      label: const Text('数据分析'),
+                    ),
                   if (!isSpecial)
                     OutlinedButton.icon(
                       onPressed: () => Navigator.pop(context, 'history'),
@@ -660,6 +665,17 @@ class TasksPageState extends State<TasksPage> {
           taskId: toInt(task['id']),
           taskTitle: '${task['name']}',
           metric: action == 'weight' ? TrendMetric.weight : TrendMetric.mood,
+          moodCategories: action == 'mood'
+              ? MoodCategory.parse(componentDoc.dataOf(ComponentType.mood))
+              : null,
+        );
+        break;
+      case 'dataChart':
+        await _openDataChart(
+          taskKind: isSpecial ? 'special' : 'daily',
+          taskId: toInt(task['id']),
+          taskTitle: '${task['name']}',
+          data: componentDoc.dataOf(ComponentType.dataChart),
         );
         break;
       case 'delete':
@@ -793,29 +809,6 @@ class TasksPageState extends State<TasksPage> {
                 _section == _TaskSection.daily ||
                 _section == _TaskSection.longTerm
             ? [
-                PopupMenuButton<TaskType>(
-                  tooltip: '添加任务',
-                  onSelected: (type) => _openEditor(type),
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: TaskType.shortTerm,
-                      child: Text('添加特殊任务'),
-                    ),
-                    PopupMenuItem(
-                      value: TaskType.daily,
-                      child: Text('添加日常任务'),
-                    ),
-                    PopupMenuItem(
-                      value: TaskType.habit,
-                      child: Text('添加习惯任务'),
-                    ),
-                    PopupMenuItem(
-                      value: TaskType.longTerm,
-                      child: Text('添加长期任务'),
-                    ),
-                  ],
-                  icon: const Icon(Icons.add),
-                ),
                 IconButton(
                   tooltip: '刷新任务',
                   onPressed: _loading ? null : _loadTasks,
@@ -824,6 +817,31 @@ class TasksPageState extends State<TasksPage> {
               ]
             : null,
       ),
+      floatingActionButton: switch (_section) {
+        _TaskSection.special => FloatingActionButton.extended(
+            heroTag: 'tasks_fab',
+            onPressed: () => _openEditor(TaskType.shortTerm),
+            tooltip: '添加特殊任务',
+            icon: const Icon(Icons.add),
+            label: const Text('添加特殊任务'),
+          ),
+        _TaskSection.daily => FloatingActionButton.extended(
+            heroTag: 'tasks_fab',
+            onPressed: () => _openEditor(TaskType.daily),
+            tooltip: '添加日常任务',
+            icon: const Icon(Icons.add),
+            label: const Text('添加日常任务'),
+          ),
+        _TaskSection.longTerm => FloatingActionButton.extended(
+            heroTag: 'tasks_fab',
+            onPressed: () => _openEditor(TaskType.longTerm),
+            tooltip: '添加长期任务',
+            icon: const Icon(Icons.add),
+            label: const Text('添加长期任务'),
+          ),
+        // 愿望/希望清单的添加按钮由 RecordsPage 自己的 FAB 提供。
+        _ => null,
+      },
       body: Column(
         children: [
           Padding(
@@ -1239,6 +1257,12 @@ class TasksPageState extends State<TasksPage> {
                       icon: const Icon(Icons.mood_outlined),
                       label: const Text('心情趋势'),
                     ),
+                  if (doc.has(ComponentType.dataChart))
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'dataChart'),
+                      icon: const Icon(Icons.insights_outlined),
+                      label: const Text('数据分析'),
+                    ),
                   OutlinedButton.icon(
                     onPressed: () => Navigator.pop(context, 'delete'),
                     icon: const Icon(Icons.delete_outline),
@@ -1269,6 +1293,16 @@ class TasksPageState extends State<TasksPage> {
           taskId: toInt(task['task_id']),
           taskTitle: '${task['title']}',
           metric: action == 'weight' ? TrendMetric.weight : TrendMetric.mood,
+          moodCategories: action == 'mood'
+              ? MoodCategory.parse(doc.dataOf(ComponentType.mood))
+              : null,
+        );
+      case 'dataChart':
+        await _openDataChart(
+          taskKind: 'long',
+          taskId: toInt(task['task_id']),
+          taskTitle: '${task['title']}',
+          data: doc.dataOf(ComponentType.dataChart),
         );
       case null:
         break;
@@ -1280,6 +1314,7 @@ class TasksPageState extends State<TasksPage> {
     required int taskId,
     required String taskTitle,
     required TrendMetric metric,
+    List<MoodCategory>? moodCategories,
   }) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -1288,6 +1323,29 @@ class TasksPageState extends State<TasksPage> {
           taskId: taskId,
           taskTitle: taskTitle,
           metric: metric,
+          moodCategories: moodCategories,
+        ),
+      ),
+    );
+    await _loadTasks();
+  }
+
+  /// 打开数据分析图表页（按组件配置的图表类型渲染）。
+  Future<void> _openDataChart({
+    required String taskKind,
+    required int taskId,
+    required String taskTitle,
+    required Map<String, dynamic> data,
+  }) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DataChartTrendPage(
+          taskKind: taskKind,
+          taskId: taskId,
+          taskTitle: taskTitle,
+          chartType: '${data[ComponentDataKeys.chartType] ?? 'line'}',
+          chartTitle: '${data[ComponentDataKeys.title] ?? ''}',
+          unit: '${data[ComponentDataKeys.unit] ?? ''}',
         ),
       ),
     );
@@ -1328,50 +1386,53 @@ class TasksPageState extends State<TasksPage> {
   Widget _buildDaily() {
     final filtered = _dailyTasks
         .where((task) => task['status_tag'] == _dailyStatus)
-        .where(
-          (task) =>
-              _dailyTagFilter == null || task['task_tag_id'] == _dailyTagFilter,
-        )
         .toList();
+    // 与愿望清单一致：状态筛选行 + 按标签分组的手风琴列表，
+    // 点开一个分组时其他同级分组自动收起。
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final task in filtered) {
+      final raw = (task['tag_name'] as String?)?.trim();
+      grouped
+          .putIfAbsent(raw == null || raw.isEmpty ? '未分类' : raw, () => [])
+          .add(task);
+    }
+    final keys = grouped.keys.toList();
+    final expanded = keys.contains(_dailyExpandedGroup)
+        ? _dailyExpandedGroup
+        : (keys.isEmpty ? null : keys.first);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildDailyStatusTabs(),
         const SizedBox(height: 8),
-        SizedBox(
-          height: 46,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  label: Text('全部 (${_dailyTasks.length})'),
-                  selected: _dailyTagFilter == null,
-                  onSelected: (_) => setState(() => _dailyTagFilter = null),
-                ),
-              ),
-              for (final tag in _dailyTags)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(
-                      '${tag['name']} (${_dailyTasks.where((task) => task['task_tag_id'] == tag['id']).length})',
-                    ),
-                    selected: _dailyTagFilter == tag['id'],
-                    onSelected: (_) =>
-                        setState(() => _dailyTagFilter = tag['id'] as int),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 8),
         if (filtered.isEmpty)
-          _EmptyState(icon: Icons.repeat, message: '此标签暂无$_dailyStatus日常任务')
+          _EmptyState(icon: Icons.repeat, message: '暂无$_dailyStatus日常任务')
         else
-          ...filtered.map(_buildTaskTile),
+          for (final entry in grouped.entries)
+            _buildDailyTagGroup(entry.key, entry.value, expanded == entry.key),
       ],
+    );
+  }
+
+  Widget _buildDailyTagGroup(
+    String tag,
+    List<Map<String, dynamic>> tasks,
+    bool expanded,
+  ) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ExpansionTile(
+        key: ValueKey('daily-group-$tag-$expanded'),
+        initiallyExpanded: expanded,
+        onExpansionChanged: (value) =>
+            setState(() => _dailyExpandedGroup = value ? tag : null),
+        leading: const Icon(Icons.label_outline),
+        title: Text(tag),
+        subtitle: Text('${tasks.length} 项'),
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        children: [for (final task in tasks) _buildTaskTile(task)],
+      ),
     );
   }
 

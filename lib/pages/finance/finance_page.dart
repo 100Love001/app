@@ -543,17 +543,27 @@ class FinancePageState extends State<FinancePage> {
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
         children: [
           _buildSummaryCard(),
-          const SizedBox(height: 16),
-          Text('近 6 个月收支趋势', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
+          const SizedBox(height: 20),
+          _SectionHeader(
+            title: '支出预算',
+            trailing: Text(
+              '${_categories.where((item) => item['type'] == '支出').length} 个分类',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _buildBudgetSection(),
+          const SizedBox(height: 20),
+          _SectionHeader(title: '近 6 个月收支趋势'),
+          const SizedBox(height: 8),
           _buildMonthlyTrend(),
           const SizedBox(height: 20),
-          Row(
-            children: [
-              Text('收支明细', style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
-              Text('${_records.length} 笔'),
-            ],
+          _SectionHeader(
+            title: '收支明细',
+            trailing: Text(
+              '${_records.length} 笔',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
           const SizedBox(height: 8),
           if (_records.isEmpty)
@@ -762,50 +772,98 @@ class FinancePageState extends State<FinancePage> {
     );
   }
 
+  /// 顶部总资金英雄卡：主色渐变 + 大数字，对标主流记账应用首页卡。
   Widget _buildSummaryCard() {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [scheme.primary, scheme.tertiary],
+        ),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.account_balance_wallet_outlined,
+                size: 18,
+                color: scheme.onPrimary.withValues(alpha: 0.9),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '总资金',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: scheme.onPrimary.withValues(alpha: 0.9),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '¥${_balance.toStringAsFixed(2)}',
+            style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+              color: scheme.onPrimary,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '全部收支记录的累计结余',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onPrimary.withValues(alpha: 0.75),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 预算区：卡片完全由「我的-账单体系-记账分类管理」驱动，
+  /// 每个支出分类一格，金额按其结算周期统计，额度取其配置预算。
+  Widget _buildBudgetSection() {
+    final expenseCategories = _categories
+        .where((item) => item['type'] == '支出')
+        .toList();
+    if (expenseCategories.isEmpty) {
+      return const _EmptyState(
+        message: '还没有支出分类，记账时可随时新建分类',
+        icon: Icons.savings_outlined,
+      );
+    }
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('总资金', style: Theme.of(context).textTheme.labelLarge),
-            const SizedBox(height: 4),
-            Text(
-              '¥${_balance.toStringAsFixed(2)}',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const Divider(height: 24),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final itemWidth = (constraints.maxWidth - 12) / 2;
-                // 预算卡片完全由「我的-账单体系-记账分类管理」驱动：
-                // 每个支出分类一张卡，金额按其结算周期统计，额度取其配置预算。
-                final expenseCategories = _categories
-                    .where((item) => item['type'] == '支出')
-                    .toList();
-                return Wrap(
-                  spacing: 12,
-                  runSpacing: 14,
-                  children: [
-                    for (final item in expenseCategories)
-                      SizedBox(
-                        width: itemWidth,
-                        child: _BudgetItem(
-                          category: item['name'] as String,
-                          period: BudgetPeriods.labelOf(
-                            item['period_type'] as String? ?? 'none',
-                          ),
-                          spent:
-                              _categoryTotals[item['name'] as String] ?? 0,
-                          limit: toDouble(item['budget']),
-                        ),
+        padding: const EdgeInsets.all(14),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final itemWidth = (constraints.maxWidth - 12) / 2;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final item in expenseCategories)
+                  SizedBox(
+                    width: itemWidth,
+                    child: _BudgetItem(
+                      category: item['name'] as String,
+                      period: BudgetPeriods.labelOf(
+                        item['period_type'] as String? ?? 'none',
                       ),
-                  ],
-                );
-              },
-            ),
-          ],
+                      spent: _categoryTotals[item['name'] as String] ?? 0,
+                      limit: toDouble(item['budget']),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -874,6 +932,7 @@ class FinancePageState extends State<FinancePage> {
       );
     }
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(8, 18, 18, 12),
         child: Column(
@@ -1022,26 +1081,12 @@ class FinancePageState extends State<FinancePage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                const Icon(Icons.stars, size: 48, color: Colors.amber),
-                const SizedBox(height: 8),
-                const Text('当前积分'),
-                Text(
-                  '$_points',
-                  style: Theme.of(context).textTheme.headlineLarge,
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text('本月收支', style: Theme.of(context).textTheme.titleMedium),
+        _buildPointsHeroCard(),
+        const SizedBox(height: 20),
+        _SectionHeader(title: '本月收支'),
         const SizedBox(height: 8),
         Card(
+          margin: EdgeInsets.zero,
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -1075,45 +1120,50 @@ class FinancePageState extends State<FinancePage> {
             ),
           ),
         ),
-        const SizedBox(height: 14),
-        Text('本月积分收支分布', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 20),
+        _SectionHeader(title: '本月积分收支分布'),
         const SizedBox(height: 8),
         _buildPointsPieChart(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 20),
         // 历史月份流水可回溯：‹ 本月/上月… ›，也可查看全部。
-        Row(
-          children: [
-            Text(
-              _pointMonthOffset == null ? '全部流水' : '$_pointFilterLabel 明细',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const Spacer(),
-            IconButton(
-              tooltip: '上一月',
-              onPressed: _pointMonthOffset == null
-                  ? null
-                  : () => setState(
-                      () => _pointMonthOffset = _pointMonthOffset! + 1,
-                    ),
-              icon: const Icon(Icons.chevron_left),
-            ),
-            Text(_pointMonthOffset == null ? '全部' : _pointFilterLabel),
-            IconButton(
-              tooltip: '下一月',
-              onPressed: (_pointMonthOffset ?? 1) <= 0
-                  ? null
-                  : () => setState(
-                      () => _pointMonthOffset = _pointMonthOffset! - 1,
-                    ),
-              icon: const Icon(Icons.chevron_right),
-            ),
-            TextButton(
-              onPressed: () => setState(
-                () => _pointMonthOffset = _pointMonthOffset == null ? 0 : null,
+        _SectionHeader(
+          title: _pointMonthOffset == null ? '全部流水' : '$_pointFilterLabel 明细',
+          trailing: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 0,
+            children: [
+              IconButton(
+                tooltip: '上一月',
+                visualDensity: VisualDensity.compact,
+                onPressed: _pointMonthOffset == null
+                    ? null
+                    : () => setState(
+                        () => _pointMonthOffset = _pointMonthOffset! + 1,
+                      ),
+                icon: const Icon(Icons.chevron_left),
               ),
-              child: Text(_pointMonthOffset == null ? '回到本月' : '全部'),
-            ),
-          ],
+              Text(
+                _pointMonthOffset == null ? '全部' : _pointFilterLabel,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              IconButton(
+                tooltip: '下一月',
+                visualDensity: VisualDensity.compact,
+                onPressed: (_pointMonthOffset ?? 1) <= 0
+                    ? null
+                    : () => setState(
+                        () => _pointMonthOffset = _pointMonthOffset! - 1,
+                      ),
+                icon: const Icon(Icons.chevron_right),
+              ),
+              TextButton(
+                onPressed: () => setState(
+                  () => _pointMonthOffset = _pointMonthOffset == null ? 0 : null,
+                ),
+                child: Text(_pointMonthOffset == null ? '回到本月' : '全部'),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 8),
         if (_visiblePointRecords.isEmpty)
@@ -1124,8 +1174,63 @@ class FinancePageState extends State<FinancePage> {
             icon: Icons.stars_outlined,
           )
         else
-          ..._visiblePointRecords.map(_buildPointRecord),
+          Card(
+            margin: EdgeInsets.zero,
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                for (var i = 0; i < _visiblePointRecords.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, indent: 68),
+                  _buildPointRecord(_visiblePointRecords[i]),
+                ],
+              ],
+            ),
+          ),
       ],
+    );
+  }
+
+  /// 积分英雄卡：琥珀渐变 + 大数字，对标主流积分账户头部。
+  Widget _buildPointsHeroCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.amber.shade700, Colors.deepOrange.shade400],
+        ),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.stars_rounded, size: 18, color: Colors.white),
+              SizedBox(width: 6),
+              Text('当前积分', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$_points',
+            style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '完成任务获得积分，支出可抵扣',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.white.withValues(alpha: 0.8),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1244,59 +1349,84 @@ class FinancePageState extends State<FinancePage> {
                 !remark.contains(sourceName)
             ? '$remark（来源：$sourceName）'
             : remark);
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CircleAvatar(
-              backgroundColor: (value >= 0 ? Colors.green : Colors.redAccent)
-                  .withValues(alpha: 0.12),
-              child: Icon(
-                value >= 0 ? Icons.add : Icons.remove,
-                color: value >= 0 ? Colors.green : Colors.redAccent,
-              ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            backgroundColor: (value >= 0 ? Colors.green : Colors.redAccent)
+                .withValues(alpha: 0.12),
+            child: Icon(
+              value >= 0 ? Icons.add : Icons.remove,
+              color: value >= 0 ? Colors.green : Colors.redAccent,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    record['operation_type'] as String? ?? '积分变动',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  record['operation_type'] as String? ?? '积分变动',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  softWrap: true,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                if (date != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      DateFormat('yyyy-MM-dd HH:mm').format(date),
+                      style: Theme.of(context).textTheme.labelSmall,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    detail,
-                    softWrap: true,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  if (date != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        DateFormat('yyyy-MM-dd HH:mm').format(date),
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    ),
-                ],
-              ),
+              ],
             ),
-            const SizedBox(width: 8),
-            Text(
-              '${value > 0 ? '+' : ''}$value 分',
-              style: TextStyle(
-                color: value >= 0 ? Colors.green : Colors.red,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${value > 0 ? '+' : ''}$value 分',
+            style: TextStyle(
+              color: value >= 0 ? Colors.green : Colors.red,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 分区标题：左标题 + 可选右侧操作区，统一财务页各分区的视觉层级。
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.title, this.trailing});
+
+  final String title;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 0, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
             ),
-          ],
-        ),
+          ),
+          ?trailing,
+        ],
       ),
     );
   }
@@ -1319,25 +1449,52 @@ class _BudgetItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isOverBudget = limit > 0 && spent > limit;
+    final progress = limit > 0 ? (spent / limit).clamp(0.0, 1.0) : 0.0;
+    final barColor = isOverBudget ? colorScheme.error : colorScheme.primary;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
+        border: isOverBudget
+            ? Border.all(color: colorScheme.error.withValues(alpha: 0.4))
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            category,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              fontWeight: FontWeight.w600,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (isOverBudget)
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 14,
+                  color: colorScheme.error,
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 5,
+              backgroundColor: colorScheme.surface.withValues(alpha: 0.8),
+              valueColor: AlwaysStoppedAnimation(barColor),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Row(
             children: [
               Expanded(
