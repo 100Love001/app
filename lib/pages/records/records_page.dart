@@ -830,10 +830,17 @@ class RecordsPageState extends State<RecordsPage> {
                               IconButton(
                                 tooltip: '删除步骤',
                                 onPressed: () => setDialogState(() {
-                                  stepControllers[i].dispose();
-                                  stepRewardControllers[i].dispose();
-                                  stepControllers.removeAt(i);
-                                  stepRewardControllers.removeAt(i);
+                                  // 先移出列表、延后一帧再释放，
+                                  // 避免输入框仍在树上时 dispose 崩溃。
+                                  final removedTitle = stepControllers
+                                      .removeAt(i);
+                                  final removedReward = stepRewardControllers
+                                      .removeAt(i);
+                                  WidgetsBinding.instance
+                                      .addPostFrameCallback((_) {
+                                    removedTitle.dispose();
+                                    removedReward.dispose();
+                                  });
                                 }),
                                 icon: const Icon(Icons.remove_circle_outline),
                               ),
@@ -1687,6 +1694,9 @@ class RecordsPageState extends State<RecordsPage> {
         ],
       ),
     );
+    // 对话框退场动画中输入框仍挂在树上，等待动画结束再释放，
+    // 否则触发 _dependents.isEmpty 断言红屏。
+    await waitForDialogDismissal();
     titleController.dispose();
     descController.dispose();
     if (saved == true) await _loadData();
@@ -1729,6 +1739,8 @@ class RecordsPageState extends State<RecordsPage> {
         ],
       ),
     );
+    // 等待退场动画结束再释放 controller（原因同上）。
+    await waitForDialogDismissal();
     if (confirmed != true) {
       noteController.dispose();
       return;

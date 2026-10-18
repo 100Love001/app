@@ -1,6 +1,7 @@
 import 'package:app/constants/app_constants.dart';
 import 'package:app/stores/tasks/task_component_repository.dart';
 import 'package:app/utils/chart_data_helper.dart';
+import 'package:app/utils/dialog.dart';
 import 'package:app/utils/task_component.dart';
 import 'package:app/utils/time.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -158,6 +159,8 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
       ),
     );
 
+    // 等待退场动画结束，再在下方路径中释放控制器（避免断言红屏）。
+    await waitForDialogDismissal();
     if (confirmed != true || !mounted) {
       valueController.dispose();
       noteController.dispose();
@@ -388,7 +391,7 @@ class _TaskTrendPageState extends State<TaskTrendPage> {
       children: [
         _StatsRow(
           items: [
-            ('记录', '${_moods.length} 天'),
+            ('记录', '${_moods.length} 条'),
             ('平均心情', average == null ? '-' : average.toStringAsFixed(1)),
             ('最新', _moodLabel(_moods.last.level)),
             ('', ''),

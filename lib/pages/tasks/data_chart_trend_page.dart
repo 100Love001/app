@@ -1,4 +1,5 @@
 import 'package:app/stores/tasks/task_component_repository.dart';
+import 'package:app/utils/dialog.dart';
 import 'package:app/utils/time.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -130,6 +131,8 @@ class _DataChartTrendPageState extends State<DataChartTrendPage> {
       ),
     );
 
+    // 等待退场动画结束，再在下方路径中释放控制器（避免断言红屏）。
+    await waitForDialogDismissal();
     if (confirmed != true || !mounted) {
       valueController.dispose();
       noteController.dispose();

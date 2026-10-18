@@ -594,13 +594,14 @@ class TasksPageState extends State<TasksPage> {
                     icon: const Icon(Icons.edit_outlined),
                     label: const Text('编辑'),
                   ),
-                  if (componentDoc.has(ComponentType.weight))
+                  // 特殊任务不支持体重/心情记录，不展示趋势入口。
+                  if (!isSpecial && componentDoc.has(ComponentType.weight))
                     OutlinedButton.icon(
                       onPressed: () => Navigator.pop(context, 'weight'),
                       icon: const Icon(Icons.monitor_weight_outlined),
                       label: const Text('体重趋势'),
                     ),
-                  if (componentDoc.has(ComponentType.mood))
+                  if (!isSpecial && componentDoc.has(ComponentType.mood))
                     OutlinedButton.icon(
                       onPressed: () => Navigator.pop(context, 'mood'),
                       icon: const Icon(Icons.mood_outlined),

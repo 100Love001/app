@@ -251,6 +251,66 @@ class TaskComponentRepository {
     }
   }
 
+  /// 首页快捷体重目标：优先全局最新记录所属任务；尚无任何记录时
+  /// 回退最近创建的带体重组件任务（日常优先，其次长期；特殊任务
+  /// 不支持体重记录），保证新建任务未录入过也能直接打开趋势页。
+  /// 找不到组件任务返回 null。
+  Future<WeightRecord?> latestWeightTarget() async {
+    final latest = await latestWeight();
+    if (latest != null) return latest;
+    final rows = await AppDatabase.instance.rawQuery('''
+      SELECT * FROM (
+        SELECT 'daily' AS task_kind, id AS task_id, name AS task_name
+        FROM daily_tasks WHERE component_json LIKE '%"type":"weight"%'
+        UNION ALL
+        SELECT 'long' AS task_kind, task_id AS task_id, title AS task_name
+        FROM tasks WHERE component_json LIKE '%"type":"weight"%'
+      )
+      ORDER BY CASE task_kind WHEN 'daily' THEN 0 ELSE 1 END,
+               task_id DESC
+      LIMIT 1
+    ''');
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return WeightRecord(
+      id: 0,
+      taskKind: '${row['task_kind']}',
+      taskId: toInt(row['task_id']),
+      recordDate: '',
+      weight: 0,
+      taskName: '${row['task_name'] ?? ''}',
+    );
+  }
+
+  /// 首页快捷心情目标：逻辑同 [latestWeightTarget]，定位带心情组件的
+  /// 任务（特殊任务不支持心情记录，不参与解析）。
+  Future<MoodRecord?> latestMoodTarget() async {
+    final latest = await latestMood();
+    if (latest != null) return latest;
+    final rows = await AppDatabase.instance.rawQuery('''
+      SELECT * FROM (
+        SELECT 'daily' AS task_kind, id AS task_id, name AS task_name
+        FROM daily_tasks WHERE component_json LIKE '%"type":"mood"%'
+        UNION ALL
+        SELECT 'long' AS task_kind, task_id AS task_id, title AS task_name
+        FROM tasks WHERE component_json LIKE '%"type":"mood"%'
+      )
+      ORDER BY CASE task_kind WHEN 'daily' THEN 0 ELSE 1 END,
+               task_id DESC
+      LIMIT 1
+    ''');
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return MoodRecord(
+      id: 0,
+      taskKind: '${row['task_kind']}',
+      taskId: toInt(row['task_id']),
+      recordDate: '',
+      level: 0,
+      taskName: '${row['task_name'] ?? ''}',
+    );
+  }
+
   /// 删除任务时清理其全部组件历史（长期任务为物理删除时调用）。
   Future<void> deleteForTask(String taskKind, int taskId) async {
     await AppDatabase.instance.delete(

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:app/stores/finance/finance_category_repository.dart';
 import 'package:app/utils/budget_period.dart';
+import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:flutter/material.dart';
 
@@ -80,6 +81,8 @@ class _BudgetManagementPageState extends State<BudgetManagementPage> {
         ],
       ),
     );
+    // 等待退场动画结束再释放，避免输入框仍在树上时崩溃。
+    await waitForDialogDismissal();
     controller.dispose();
     if (amount == null || !mounted) return;
     try {

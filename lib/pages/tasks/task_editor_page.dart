@@ -4,6 +4,7 @@ import 'package:app/constants/app_constants.dart';
 import 'package:app/stores/settings/app_settings_controller.dart';
 import 'package:app/stores/tasks/task_component_repository.dart';
 import 'package:app/stores/tasks/task_repository.dart';
+import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
 import 'package:app/utils/task_component.dart';
@@ -90,7 +91,14 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
   ) {
     final rawJson = row?['component_json'] as String?;
     if (rawJson != null && rawJson.trim().isNotEmpty) {
-      return TaskComponentDocument.decode(rawJson);
+      final doc = TaskComponentDocument.decode(rawJson);
+      // 特殊任务不再支持体重/心情：旧数据里的残留组件在编辑时剔除，
+      // 保存后从 component_json 移除（历史趋势记录保留在数据库中）。
+      if (type == TaskType.shortTerm) {
+        doc.remove(ComponentType.weight);
+        doc.remove(ComponentType.mood);
+      }
+      return doc;
     }
     // 老数据（component_json 为空）：从列字段重建默认文档。
     final doc = TaskComponentDocument.defaultFor(type);
@@ -295,9 +303,12 @@ class _TaskEditorPageState extends State<TaskEditorPage> {
   /// 不同任务类型下可用的组件（与存储/通知能力对齐）。
   List<ComponentType> _availableTypes() {
     final hidden = switch (_type) {
+      // 特殊任务不支持体重/心情记录（仅日常/长期/习惯任务可用）。
       TaskType.shortTerm => {
         ComponentType.repeatRule,
         ComponentType.deadline,
+        ComponentType.weight,
+        ComponentType.mood,
       },
       // 日常任务放开重复规则：添加后保存时自动转为习惯任务。
       TaskType.daily => {ComponentType.reminders, ComponentType.deadline},
@@ -1274,6 +1285,8 @@ class _SpecialReminderBody extends StatelessWidget {
                 ],
               ),
             );
+            // 等待退场动画结束再释放，避免输入框仍在树上时崩溃。
+            await waitForDialogDismissal();
             controller.dispose();
             if (minutes != null && minutes >= 0) {
               persist(Set<int>.of(selected)..add(minutes));
@@ -1591,6 +1604,8 @@ class _RecordComponentBodyState extends State<_RecordComponentBody> {
         ),
       ),
     );
+    // 等待退场动画结束再释放，避免输入框仍在树上时崩溃。
+    await waitForDialogDismissal();
     final label = labelController.text.trim();
     labelController.dispose();
     if (confirmed != true || label.isEmpty) return;

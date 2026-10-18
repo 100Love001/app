@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:app/constants/app_constants.dart';
+import 'package:app/pages/tasks/task_trend_page.dart';
 import 'package:app/stores/database/add_database.dart';
 import 'package:app/stores/database/points_service.dart';
 import 'package:app/stores/home/home_repository.dart';
@@ -13,7 +14,6 @@ import 'package:app/utils/dialog.dart';
 import 'package:app/utils/num_cast.dart';
 import 'package:app/utils/repeat_rule.dart';
 import 'package:app/utils/task_component.dart';
-import 'package:app/utils/time.dart';
 import 'package:app/viewmodels/home/home_view_model.dart';
 import 'package:flutter/material.dart';
 
@@ -384,8 +384,9 @@ class HomePageState extends State<HomePage> {
         TaskRepository.instance.loadSpecialTasks(),
         TaskRepository.instance.loadDailyTasks(),
         TaskRepository.instance.loadLongTermTasks(),
-        TaskComponentRepository.instance.latestWeight(),
-        TaskComponentRepository.instance.latestMood(),
+        // 快捷记录目标：优先最新记录所属任务，无记录时回退最近带组件任务。
+        TaskComponentRepository.instance.latestWeightTarget(),
+        TaskComponentRepository.instance.latestMoodTarget(),
       ]);
       final today = DateTime.now();
       final todayStart = DateTime(today.year, today.month, today.day);
@@ -1662,7 +1663,10 @@ class HomePageState extends State<HomePage> {
     final scheme = Theme.of(context).colorScheme;
     final weight = _latestWeight;
     final mood = _latestMood;
-    final moodLevel = MoodLevel.fromScore(mood?.level);
+    // 目标可为「带组件但尚无记录」的任务（id=0 哨兵）：显示未记录但仍可快捷录入。
+    final hasWeightRecord = weight != null && weight.id > 0;
+    final hasMoodRecord = mood != null && mood.id > 0;
+    final moodLevel = MoodLevel.fromScore(hasMoodRecord ? mood.level : null);
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Padding(
@@ -1696,11 +1700,11 @@ class HomePageState extends State<HomePage> {
               label: '体重',
               value: _overviewLoading
                   ? '…'
-                  : weight == null
+                  : !hasWeightRecord
                   ? '未记录'
                   : '${weight.weight.toStringAsFixed(1)} kg',
-              hint: weight == null ? '点击录入' : weight.recordDate,
-              onTap: _overviewLoading ? null : () => unawaited(_quickRecordWeight()),
+              hint: hasWeightRecord ? weight.recordDate : '查看趋势',
+              onTap: _overviewLoading ? null : () => unawaited(_openWeightTrend()),
             ),
             Divider(
               height: 16,
@@ -1713,11 +1717,11 @@ class HomePageState extends State<HomePage> {
               label: '心情',
               value: _overviewLoading
                   ? '…'
-                  : mood == null
+                  : !hasMoodRecord
                   ? '未记录'
                   : MoodCategory.labelFor(mood.level, _moodCategories),
-              hint: mood == null ? '点击录入' : mood.recordDate,
-              onTap: _overviewLoading ? null : () => unawaited(_quickRecordMood()),
+              hint: hasMoodRecord ? mood.recordDate : '查看趋势',
+              onTap: _overviewLoading ? null : () => unawaited(_openMoodTrend()),
             ),
           ],
         ),
@@ -1802,15 +1806,15 @@ class HomePageState extends State<HomePage> {
     _ => Colors.green.shade500,
   };
 
-  /// 尚无任何体重/心情记录时，引导用户先在任务里添加对应组件。
+  /// 未找到任何带体重/心情组件的任务时，引导用户先在任务里添加对应组件。
   Future<void> _showRecordGuide(String componentLabel) async {
     final go = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text('还没有「$componentLabel」记录'),
         content: Text(
-          '先在任务编辑器中给任意任务添加「$componentLabel」组件并录入一条数据，'
-          '之后就可以在这里快捷记录了。',
+          '先在任务编辑器中给任意任务添加「$componentLabel」组件，'
+          '之后就可以在这里查看和记录趋势了。',
         ),
         actions: [
           TextButton(
@@ -1827,80 +1831,30 @@ class HomePageState extends State<HomePage> {
     if (go == true && mounted) widget.onOpenTasks?.call();
   }
 
-  /// 快捷记录体重：写入最近使用的体重任务（与趋势图同源）。
-  Future<void> _quickRecordWeight() async {
+  /// 打开体重趋势页：目标为最新记录所属任务（无记录时回退最近带
+  /// 体重组件的任务），查看与录入都在趋势页内完成。
+  Future<void> _openWeightTrend() async {
     final target = _latestWeight;
     if (target == null) {
       await _showRecordGuide('体重记录');
       return;
     }
-    final controller = TextEditingController(
-      text: target.weight.toStringAsFixed(1),
-    );
-    final value = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('记录体重'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (target.taskName.isNotEmpty)
-              Text(
-                '将保存到任务「${target.taskName}」的体重曲线',
-                style: Theme.of(dialogContext).textTheme.bodySmall,
-              ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: '今日体重（kg）',
-                suffixText: 'kg',
-              ),
-            ),
-          ],
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TaskTrendPage(
+          taskKind: target.taskKind,
+          taskId: target.taskId,
+          taskTitle: target.taskName,
+          metric: TrendMetric.weight,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
       ),
     );
-    await waitForDialogDismissal();
-    controller.dispose();
-    final parsed = double.tryParse(value ?? '');
-    if (parsed == null) return;
-    if (parsed <= 0 || parsed > 600) {
-      _showMessage('体重需在 0-600 kg 之间');
-      return;
-    }
-    try {
-      await TaskComponentRepository.instance.addWeight(
-        taskKind: target.taskKind,
-        taskId: target.taskId,
-        recordDate: TimeUtil.toDateKey(DateTime.now()),
-        weight: parsed,
-      );
-      await _loadHomeOverview();
-      if (mounted) _showMessage('已记录今日体重 ${parsed.toStringAsFixed(1)} kg');
-    } catch (error) {
-      _showMessage('记录体重失败：$error');
-    }
+    unawaited(_loadHomeOverview());
   }
 
-  /// 快捷记录心情：按任务心情组件自定义类别（缺省 MoodLevel 五项）选择 + 可选备注，
-  /// 写入最近使用的心情任务。
-  Future<void> _quickRecordMood() async {
+  /// 打开心情趋势页：按目标任务的自定义类别渲染，查看与录入都在趋势
+  /// 页内完成，返回后刷新首页概览。
+  Future<void> _openMoodTrend() async {
     final target = _latestMood;
     if (target == null) {
       await _showRecordGuide('心情记录');
@@ -1909,80 +1863,18 @@ class HomePageState extends State<HomePage> {
     final categories = await TaskComponentRepository.instance
         .loadMoodCategories(taskKind: target.taskKind, taskId: target.taskId);
     if (!mounted) return;
-    var selected = categories.any((item) => item.score == target.level)
-        ? target.level
-        : categories[categories.length ~/ 2].score;
-    final noteController = TextEditingController();
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('记录心情'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (target.taskName.isNotEmpty)
-                Text(
-                  '将保存到任务「${target.taskName}」的情绪曲线',
-                  style: Theme.of(dialogContext).textTheme.bodySmall,
-                ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final category in categories)
-                    ChoiceChip(
-                      label: Text(category.label),
-                      selected: selected == category.score,
-                      onSelected: (_) =>
-                          setDialogState(() => selected = category.score),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: noteController,
-                maxLength: 50,
-                decoration: const InputDecoration(
-                  labelText: '备注（可选）',
-                  hintText: '今天感觉怎么样？',
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('保存'),
-            ),
-          ],
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TaskTrendPage(
+          taskKind: target.taskKind,
+          taskId: target.taskId,
+          taskTitle: target.taskName,
+          metric: TrendMetric.mood,
+          moodCategories: categories,
         ),
       ),
     );
-    await waitForDialogDismissal();
-    final note = noteController.text;
-    noteController.dispose();
-    if (saved != true) return;
-    try {
-      await TaskComponentRepository.instance.addMood(
-        taskKind: target.taskKind,
-        taskId: target.taskId,
-        recordDate: TimeUtil.toDateKey(DateTime.now()),
-        level: selected,
-        note: note,
-      );
-      await _loadHomeOverview();
-      if (mounted) _showMessage('已记录今日心情');
-    } catch (error) {
-      _showMessage('记录心情失败：$error');
-    }
+    unawaited(_loadHomeOverview());
   }
 
   Widget _buildLoadError(BuildContext context) {
